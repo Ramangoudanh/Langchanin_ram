@@ -183,3 +183,78 @@ def reminder_tool(action: str, reminder: str = None) -> str:
 
     return "❌ Invalid action or missing reminder."
 
+
+
+
+
+import os
+import uuid
+from langchain.vectorstores import PGVector
+from langchain_openai import OpenAIEmbeddings
+from langchain.docstore.document import Document
+from langchain.tools import tool
+from dotenv import load_dotenv
+
+# Load environment
+load_dotenv()
+
+# --- Configuration ---
+connection_string = os.getenv("DATABASE_URL")  # e.g. postgresql+psycopg2://user:pass@localhost:5432/todo_db
+collection_name = "todo_collection"
+
+# --- Vector Store Setup ---
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+vector_store = PGVector(
+    connection_string=connection_string,
+    embedding_function=embeddings,
+    collection_name=collection_name,
+    use_jsonb=True
+)
+
+# --- LangChain Tool ---
+@tool("todo_pgvector_tool", return_direct=True)
+def todo_pgvector_tool(action: str, task: str = None) -> str:
+    """
+    Manage a semantic To-Do list using PGVector.
+    Supports:
+      - Add: action='add', task='Task text'
+      - List: action='list'
+      - Delete: action='delete', task='Task text' (semantic match + delete by ID)
+    """
+
+    # --- ADD ---
+    if action == "add" and task:
+        doc_id = str(uuid.uuid4())
+        doc = Document(page_content=task, metadata={"id": doc_id})
+        vector_store.add_documents([doc], ids=[doc_id])
+        return f"✅ Added ToDo: '{task}' (id={doc_id})"
+
+    # --- LIST ---
+    elif action == "list":
+        # NOTE: LangChain PGVector doesn’t expose a direct “list all” API.
+        # We'll simulate by searching with an empty query and large k.
+        results = vector_store.similarity_search(query="", k=100)
+        if not results:
+            return "📭 No ToDos found."
+        todos = [f"{i+1}. {doc.page_content} (id={doc.metadata.get('id','?')})" for i, doc in enumerate(results)]
+        return "📝 Your To-Do List:\n" + "\n".join(todos)
+
+    # --- DELETE (semantic match) ---
+    elif action == "delete" and task:
+        # Step 1: Find the closest matching ToDo via similarity search
+        results = vector_store.similarity_search(query=task, k=1)
+        if not results:
+            return f"⚠️ No ToDo found similar to '{task}'."
+
+        best_doc = results[0]
+        doc_id = best_doc.metadata.get("id")
+
+        if not doc_id:
+            return f"⚠️ Could not find ID for the matched task: '{best_doc.page_content}'."
+
+        # Step 2: Delete that ToDo by ID
+        vector_store.delete(ids=[doc_id])
+        return f"🗑️ Deleted closest ToDo: '{best_doc.page_content}' (id={doc_id})"
+
+    return "❌ Invalid action or missing task."
