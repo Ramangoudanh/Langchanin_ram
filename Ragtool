@@ -69,3 +69,18 @@ def safe_load_json(path):
         with open(path, "w") as f:
             json.dump([], f)
         return []
+
+"""
+    Manage reminders.  
+    Use this tool to ADD, LIST, or DELETE reminders.
+
+    Parameters:
+    - action: One of ["add", "list", "delete"].
+      Example: "add" to add a reminder, "list" to see all, "delete" to remove by text.
+    - reminder: The reminder text (required for add/delete).
+    
+    Examples:
+    - Add a reminder: action="add", reminder="Call mom at 5 PM"
+    - List all reminders: action="list"
+    - Delete a reminder: action="delete", reminder="Call mom"
+    """
