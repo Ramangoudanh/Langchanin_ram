@@ -19,3 +19,27 @@ agent = initialize_agent(
     middleware=middlewares,   # 👈 pass list here
     verbose=True
 )
+
+# 🧩 Imports
+from langchain.callbacks.base import BaseCallbackHandler
+
+# ✅ Define the terminal logger
+class TerminalLogger(BaseCallbackHandler):
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        print("\n🤖 LLM START:")
+        for p in prompts:
+            print(p)
+
+    def on_tool_start(self, serialized, input_str, **kwargs):
+        print(f"\n🧰 TOOL USED: {serialized.get('name')}")
+        print(f"➡️ INPUT: {input_str}")
+
+    def on_tool_end(self, output, **kwargs):
+        print(f"✅ TOOL OUTPUT: {output}")
+
+    def on_llm_end(self, response, **kwargs):
+        # Safely extract token usage if available
+        usage = {}
+        if hasattr(response, "llm_output") and response.llm_output:
+            usage = response.llm_output.get("token_usage", {})
+        print(f"📊 TOKEN USAGE: {usage}")
