@@ -1,0 +1,57 @@
+from langchain.vectorstores.pgvector import PGVector
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.chains import RetrievalQA
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import PromptTemplate
+
+@tool("RagSearchTool", return_direct=True)
+def vector_search(action: str, reminder: str = None) -> str:
+    """
+    Retrieves and summarizes context from stored documents using PGVector and RAG.
+    action: User query or task description.
+    reminder: Optional reminder text or extra instruction.
+    """
+
+    # Step 1: Setup Embeddings
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+    # Step 2: Initialize the PGVector store connection
+    connection_string = "postgresql+psycopg://username:password@localhost:5432/vector_db"
+    collection_name = "documents_collection"
+
+    vector_store = PGVector(
+        connection=connection_string,
+        embeddings=embeddings,
+        collection_name=collection_name,
+        use_jsonb=True,
+    )
+
+    # Step 3: Create Retriever
+    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+
+    # Step 4: Define LLM and prompt for summarization
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+
+    prompt = PromptTemplate(
+        input_variables=["context", "question"],
+        template=(
+            "You are a helpful assistant. Use the following context to answer the question.\n\n"
+            "Context:\n{context}\n\n"
+            "Question: {question}\n\n"
+            "Answer in concise and factual way:"
+        )
+    )
+
+    # Step 5: Create RAG chain
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        retriever=retriever,
+        chain_type="stuff",
+        chain_type_kwargs={"prompt": prompt},
+    )
+
+    # Step 6: Run the query
+    query = action if reminder is None else f"{action}. Additional context: {reminder}"
+    response = qa_chain.run(query)
+
+    return response
