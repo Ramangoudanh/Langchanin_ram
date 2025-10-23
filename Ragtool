@@ -57,3 +57,15 @@ def vector_search(action: str, reminder: str = None) -> str:
     response = rag_chain.invoke(query)
 
     return response
+def safe_load_json(path):
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+            if not isinstance(data, list):
+                return []
+            return data
+    except (json.JSONDecodeError, FileNotFoundError):
+        # if file empty or invalid JSON, reset it
+        with open(path, "w") as f:
+            json.dump([], f)
+        return []
