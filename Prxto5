@@ -1,0 +1,65 @@
+import json
+from datetime import datetime
+
+@agent1.node("node5", prompt=report_synthesis_prompt)
+def node5_report_assembly(state: ResearchCoordinatorState) -> ResearchCoordinatorState:
+    """
+    Node 5 – Compiles all sub-query results into the final structured report.
+    """
+
+    print("\n📘 [Agent 1 – Node 5] Assembling final report...")
+
+    # Collect completed sub-queries
+    completed_subs = [s for s in state.sub_queries if s.status == "completed"]
+    if not completed_subs:
+        print("⚠️ No completed sub-queries found; cannot assemble report.")
+        state.next_node = None
+        return state
+
+    # Build structured input for LLM
+    llm_input = json.dumps([
+        {
+            "id": s.id,
+            "question": s.text,
+            "answer": s.answer,
+            "sources": s.sources or [],
+            "confidence": s.confidence or 0.0
+        }
+        for s in completed_subs
+    ], indent=2)
+
+    # Ask LLM to create structured report JSON
+    llm_response = agent1.llm.invoke(
+        f"Using the following sub-query data, assemble the final report according to your node instructions:\n{llm_input}"
+    ).content.strip()
+
+    # Parse output
+    try:
+        report_data = json.loads(llm_response)["final_report"]
+    except Exception:
+        report_data = {
+            "title": state.user_query[:60] + "...",
+            "executive_summary": "LLM output parsing failed; fallback minimal report.",
+            "sections": [
+                {"sub_query": s.text, "answer": s.answer, "confidence": s.confidence, "sources": s.sources}
+                for s in completed_subs
+            ],
+            "meta": {
+                "overall_confidence": round(sum(s.confidence or 0 for s in completed_subs) / len(completed_subs), 2),
+                "total_subqueries": len(completed_subs),
+                "completion_date": datetime.utcnow().isoformat()
+            }
+        }
+
+    # Store in state
+    state.final_report = report_data
+    state.overall_progress_pct = 100.0
+    state.workflow_status = "completed"
+    state.last_updated = datetime.utcnow()
+    state.next_node = None
+
+    print(f"✅ Final report assembled. Total sub-queries: {len(completed_subs)}")
+    print(f"📊 Overall confidence: {report_data['meta']['overall_confidence']}")
+    print("🎯 Workflow completed successfully.")
+
+    return state
