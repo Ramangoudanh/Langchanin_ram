@@ -1,79 +1,59 @@
-@MCP.tool("statistical_analysis_tool")          # <-- MCP registry
-@tool("statistical_analysis_tool", return_direct=True)
-def statistical_analysis_tool(topic: str, k: int = 5) -> str:
+@MCP.tool("report_structuring_tool")   # ✅ Register with MCP protocol
+@tool("report_structuring_tool", return_direct=True)
+def report_structuring_tool(validated_content: str, topic: str = "Research Report") -> str:
     """
-    Extracts and summarizes numerical information (percentages, growth, ratios)
-    from relevant documents to produce a quantitative insight summary.
+    Converts validated research content into a structured, hierarchical report format.
 
     Args:
-        topic (str): The subject or dataset to analyze statistically.
-        k (int): Number of top retrieved docs.
+        validated_content (str): Fact-checked and analyzed data (output from Agent 4).
+        topic (str): Report title or research theme.
 
     Returns:
-        str: Statistical summary including key figures, averages, and insights.
+        str: Formatted multi-section report outline (Markdown-style or JSON structure).
     """
 
-    # --- Step 1: Retrieve documents from vector DB ---
-    docs = vector_store.similarity_search(topic, k=k)
-    corpus = "\n".join([d.page_content[:600] for d in docs])
-
-    # --- Step 2: Extract numeric values from text ---
-    numbers = re.findall(r"\b\d+(?:\.\d+)?%?\b", corpus)
-    clean_numbers = []
-    for n in numbers:
-        try:
-            clean_numbers.append(float(n.replace("%", "")))
-        except:
-            continue
-
-    # --- Step 3: Compute basic statistics (if enough numeric data) ---
-    stats_summary = ""
-    if clean_numbers:
-        avg_val = statistics.mean(clean_numbers)
-        med_val = statistics.median(clean_numbers)
-        rng_val = max(clean_numbers) - min(clean_numbers)
-        stats_summary = (
-            f"Found {len(clean_numbers)} numeric values.\n"
-            f"Average ≈ {avg_val:.2f}\n"
-            f"Median ≈ {med_val:.2f}\n"
-            f"Range ≈ {rng_val:.2f}\n"
-        )
-    else:
-        stats_summary = "No clear numeric patterns extracted from the dataset."
-
-    # --- Step 4: LLM-driven interpretation ---
     prompt = f"""
-    You are the Statistical Analysis Engine.
+    You are the Report Structuring Engine.
+
+    Your task is to take the validated research findings and organize them into a
+    professional, academic-style report. Maintain clarity, hierarchy, and logical flow.
 
     Topic: {topic}
 
-    Extracted numeric data:
-    {stats_summary}
+    Validated Research Content:
+    {validated_content}
 
-    Text corpus:
-    {corpus}
+    ### Guidelines:
+    - Use professional and academic tone.
+    - Include the following sections (if relevant):
+        1. Abstract
+        2. Introduction
+        3. Methodology or Approach
+        4. Key Findings
+        5. Comparative or Trend Analysis
+        6. Discussion or Implications
+        7. Conclusion
+        8. References (placeholder)
+    - Create a **structured Markdown or JSON-like format** that can be directly rendered as a report.
+    - Ensure each section contains concise, evidence-backed statements.
 
-    Tasks:
-      1. Identify what these numbers represent (growth rate, count, ratio, etc.).
-      2. Summarize quantitative trends or anomalies.
-      3. Provide a short analytical paragraph explaining the statistical meaning.
-      4. Estimate a confidence score (0–1).
+    ### Output Format Example:
+    {{
+      "title": "...",
+      "abstract": "...",
+      "introduction": "...",
+      "key_findings": ["...", "..."],
+      "discussion": "...",
+      "conclusion": "...",
+      "references": ["..."]
+    }}
 
-    Output format:
-      **Key Statistics:** ...
-      **Interpretation:** ...
-      **Summary:** ...
-      **Confidence:** ...
+    Now structure the report based on the provided content.
     """
 
     response = llm.invoke(prompt).content
 
-    # --- Step 5: Parse optional numeric confidence ---
-    match = re.search(r"(\d\.\d+)", response)
-    conf_score = float(match.group(1)) if match else 0.8
-
     return (
-        f"📊 Statistical Analysis for: '{topic}'\n"
-        f"Confidence ≈ {conf_score:.2f}\n\n"
+        f"🧾 **Structured Report for:** {topic}\n\n"
         f"{response.strip()}"
     )
