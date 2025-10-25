@@ -1,62 +1,71 @@
-@tool("trend_analysis_tool", return_direct=True)
-def trend_analysis_tool(topic: str, timeframe: str = "2015-2025", k: int = 5) -> str:
+@MCP.tool("causal_reasoning_tool")  # <-- MCP registration for interoperability
+@tool("causal_reasoning_tool", return_direct=True)
+def causal_reasoning_tool(topic: str, k: int = 5) -> str:
     """
-    Detects temporal or progression trends related to a given topic.
+    Detects and explains cause-effect relationships for a given topic or event.
 
     Steps:
-      1. Retrieves top-k documents from PGVector for the topic.
-      2. Extracts any year or date patterns in text.
-      3. Asks LLM to infer direction (rising/falling/stable), drivers, and implications.
+      1. Retrieves relevant data/documents from PGVector.
+      2. Extracts causal connectors (e.g. "because", "due to", "led to").
+      3. Uses LLM reasoning to construct a cause-effect chain.
+      4. Outputs both textual explanation and structured reasoning graph.
 
     Args:
-        topic (str): Subject to analyze for trends.
-        timeframe (str): Optional reference range (e.g. "2015-2025").
-        k (int): Number of top docs to inspect.
+        topic (str): Subject/event to analyze causality for.
+        k (int): Number of top documents to analyze.
 
     Returns:
-        str: Structured trend analysis summary.
+        str: Structured causal reasoning summary.
     """
 
-    # --- Step 1: Retrieve evidence ---
+    # --- Step 1: Retrieve contextual evidence ---
     docs = vector_store.similarity_search(topic, k=k)
-    text_data = "\n".join([d.page_content[:500] for d in docs])
+    evidence_text = "\n".join([d.page_content[:500] for d in docs])
 
-    # --- Step 2: Find temporal cues (years, dates) ---
-    years = sorted(set(re.findall(r"(?:19|20)\d{2}", text_data)))
-    years_str = ", ".join(years) if years else "No explicit years found"
+    # --- Step 2: Extract direct causal cues from text ---
+    causal_snippets = []
+    for sentence in evidence_text.split("."):
+        if any(connector in sentence.lower() for connector in ["because", "due to", "led to", "as a result", "therefore"]):
+            causal_snippets.append(sentence.strip())
 
-    # --- Step 3: LLM reasoning on temporal evolution ---
+    causal_text = "\n".join(causal_snippets[:10]) if causal_snippets else "No explicit causal statements detected."
+
+    # --- Step 3: LLM-based causal inference ---
     prompt = f"""
-    You are the Trend Analysis Engine.
+    You are the Causal Reasoning Engine.
 
-    Analyze the following data for topic: {topic}
-    Time Range: {timeframe}
+    Analyze the following topic for cause-effect relationships.
 
-    Text Samples:
-    {text_data}
+    Topic: {topic}
 
-    Detected Years: {years_str}
+    Relevant text evidence:
+    {evidence_text}
+
+    Extracted causal clues:
+    {causal_text}
 
     Tasks:
-      1. Identify key patterns or changes over time (increase, decline, cyclical, stable).
-      2. Describe factors causing those changes.
-      3. Predict short-term continuation or reversal of the trend.
-      4. Output:
-         - Trend Direction
-         - Quantitative Pattern (if mentioned)
-         - Main Drivers
-         - Future Outlook
-         - Concise Summary Paragraph
+      1. Identify primary causes and their effects.
+      2. Describe causal chain (A → B → C) if present.
+      3. Summarize key drivers behind the observed outcomes.
+      4. Estimate causal confidence (0–1).
+      5. Output in this format:
+
+      **Causal Factors:** ...
+      **Effects/Outcomes:** ...
+      **Causal Chain:** ...
+      **Summary:** ...
+      **Confidence:** ...
     """
 
     response = llm.invoke(prompt).content
 
-    # --- Step 4: Basic confidence inference from textual cues ---
-    conf_match = re.search(r"(\d\.\d+)", response)
-    conf_score = float(conf_match.group(1)) if conf_match else 0.75
+    # --- Step 4: Parse confidence if mentioned ---
+    match = re.search(r"(\d\.\d+)", response)
+    conf_score = float(match.group(1)) if match else 0.75
 
     return (
-        f"📈 Trend Analysis for '{topic}' ({timeframe})\n"
+        f"🔗 Causal Reasoning for: '{topic}'\n"
         f"Confidence ≈ {conf_score:.2f}\n\n"
         f"{response.strip()}"
     )
