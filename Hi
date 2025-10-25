@@ -1,136 +1,85 @@
-import requests
-from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
+from langchain_community.tools import tool
 from langchain_postgres import PGVector
-from langchain.schema import Document
-from openai import OpenAI
-from datetime import datetime
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_community.document_loaders import WebBaseLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-# --------------------------
-# Configuration
-# --------------------------
-OPENAI_KEY = "YOUR_OPENAI_API_KEY"
-PGVECTOR_URL = "postgresql+psycopg2://postgres:123@localhost:5432/ragdb"
+# -------------------------------
+# 1. Database Setup (PGVector)
+# -------------------------------
+connection_string = "postgresql+psycopg2://username:password@localhost:5432/vector_db"
 
-client = OpenAI(api_key=OPENAI_KEY)
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
-# Initialize PGVector store
 vector_store = PGVector(
-    connection_string=PGVECTOR_URL,
-    collection_name="auto_scraper_docs",
-    embedding_function=lambda texts: [
-        client.embeddings.create(input=t, model="text-embedding-3-small").data[0].embedding
-        for t in texts
-    ],
+    connection=connection_string,
+    embeddings=embeddings,
+    collection_name="research_documents",
     use_jsonb=True
 )
 
-# --------------------------
-# Helper Functions
-# --------------------------
-
-def auto_search(query, max_results=5):
-    """Search URLs using DuckDuckGo."""
-    results = []
-    with DDGS() as ddgs:
-        for r in ddgs.text(query, max_results=max_results):
-            if r.get("href"):
-                results.append(r["href"])
-    return results
-
-def scrape_page(url):
-    """Fetch and clean a single webpage."""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; AutoScraper/1.0)"}
-        res = requests.get(url, headers=headers, timeout=10)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
-
-        # Remove irrelevant tags
-        for tag in soup(["script", "style", "footer", "nav", "form", "aside"]):
-            tag.decompose()
-
-        text = " ".join(soup.get_text(separator=" ", strip=True).split())
-        title = soup.title.string if soup.title else "Untitled"
-
-        if len(text.split()) < 100:
-            return None
-
-        return {
-            "title": title,
-            "url": url,
-            "content": text
-        }
-
-    except Exception as e:
-        print(f"❌ Error scraping {url}: {e}")
-        return None
-
-# --------------------------
-# Main Tool Function
-# --------------------------
-
-def semantic_scraper_and_vector_tool(payload):
+# -------------------------------
+# 2. Web Tool — Basic Scraper
+# -------------------------------
+@tool("web_scraper", return_direct=True)
+def web_scraper(url: str) -> str:
     """
-    Auto-scrapes search results for a query,
-    stores them into PGVector, and performs semantic search.
+    Scrapes content from the provided URL, splits it into chunks,
+    and stores it in the PGVector collection for future semantic retrieval.
+
+    Args:
+        url (str): The website URL to scrape.
+
+    Returns:
+        str: Summary of scraping operation.
     """
-    query = payload.get("query")
-    max_results = payload.get("max_results", 5)
-    top_k = payload.get("top_k", 3)
+    loader = WebBaseLoader(url)
+    documents = loader.load()
 
-    if not query:
-        return {"status": "error", "tool": "semantic_scraper_and_vector_tool", "error": "Missing query"}
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = splitter.split_documents(documents)
 
-    # 1️⃣ Search for URLs
-    urls = auto_search(query, max_results=max_results)
-    if not urls:
-        return {"status": "error", "tool": "semantic_scraper_and_vector_tool", "error": "No search results found"}
+    vector_store.add_documents(chunks)
+    return f"✅ Scraped and indexed {len(chunks)} chunks from {url}"
 
-    scraped_docs = []
+# -------------------------------
+# 3. Semantic Scraping Search Tool
+# -------------------------------
+@tool("semantic_scraping_search", return_direct=True)
+def semantic_scraping_search(query: str, k: int = 5) -> str:
+    """
+    Performs semantic search over the scraped documents stored in PGVector.
 
-    # 2️⃣ Scrape each result
-    for url in urls:
-        page = scrape_page(url)
-        if page:
-            doc = Document(
-                page_content=page["content"],
-                metadata={
-                    "url": page["url"],
-                    "title": page["title"],
-                    "source": "auto_scraper",
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-            )
-            scraped_docs.append(doc)
+    Args:
+        query (str): The user query.
+        k (int): Number of top relevant results to return.
 
-    if not scraped_docs:
-        return {"status": "error", "tool": "semantic_scraper_and_vector_tool", "error": "No valid content scraped"}
+    Returns:
+        str: Combined content of top matching documents.
+    """
+    results = vector_store.similarity_search(query, k=k)
+    if not results:
+        return "No relevant information found."
+    
+    return "\n\n---\n\n".join([doc.page_content for doc in results])
 
-    # 3️⃣ Store in PGVector
-    vector_store.add_documents(scraped_docs)
+# -------------------------------
+# 4. Keyword Search Tool
+# -------------------------------
+@tool("keyword_search", return_direct=True)
+def keyword_search(keyword: str) -> str:
+    """
+    Performs simple keyword-based search on document metadata or text content.
 
-    # 4️⃣ Perform Semantic Search
-    query_emb = client.embeddings.create(input=query, model="text-embedding-3-small").data[0].embedding
+    Args:
+        keyword (str): Keyword to search for.
 
-    search_results = vector_store.similarity_search_with_score_by_vector(
-        embedding=query_emb,
-        k=top_k
-    )
+    Returns:
+        str: Matched document contents or message if none found.
+    """
+    results = vector_store.similarity_search_with_score(keyword, k=10)
+    filtered = [doc.page_content for doc, score in results if keyword.lower() in doc.page_content.lower()]
 
-    # 5️⃣ Format response
-    formatted_results = []
-    for doc, score in search_results:
-        formatted_results.append({
-            "similarity_score": float(score),
-            "snippet": doc.page_content[:300] + "...",
-            "metadata": doc.metadata
-        })
-
-    return {
-        "status": "success",
-        "tool": "semantic_scraper_and_vector_tool",
-        "query": query,
-        "documents_added": len(scraped_docs),
-        "results": formatted_results
-    }
+    if not filtered:
+        return f"No documents found containing keyword: {keyword}"
+    return "\n\n---\n\n".join(filtered[:5])
