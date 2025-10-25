@@ -1,73 +1,58 @@
-@tool("cross_reference_validator", return_direct=True)
-def cross_reference_validator(claim: str, k: int = 5) -> str:
+from langchain_community.tools import tool
+from langchain_openai import ChatOpenAI
+import re
+
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+
+@tool("contradiction_detector", return_direct=True)
+def contradiction_detector(claims: list[str]) -> str:
     """
-    Verifies a factual claim using:
-    1. Semantic retrieval from PGVector
-    2. DuckDuckGo web search (no API key needed)
-    3. LLM-based reasoning for final validation
+    Detects contradictions or inconsistencies among multiple factual statements.
+
+    Args:
+        claims (list[str]): A list of 2–10 factual claims or summary statements.
 
     Returns:
-        str: A detailed validation report including source count,
-             credible domains, recency, and LLM justification.
+        str: Analysis report with contradiction level and LLM reasoning.
+    """
+    if len(claims) < 2:
+        return "Need at least two claims to compare."
+
+    # Combine all claims into a structured prompt
+    claims_text = "\n".join([f"{i+1}. {c}" for i, c in enumerate(claims)])
+
+    prompt = f"""
+    You are a factual consistency analyst.
+
+    Analyze the following statements for agreement or contradiction:
+
+    {claims_text}
+
+    Tasks:
+    1. Identify which statements agree and which conflict.
+    2. Rate the overall contradiction level on a 0–1 scale
+       (0 = perfectly consistent, 1 = highly contradictory).
+    3. Provide concise reasoning and examples of conflicts if any.
+
+    Return both a numeric contradiction score and your reasoning.
     """
 
-    # --- Step 1: Retrieve internal evidence ---
-    local_results = vector_store.similarity_search(claim, k=k)
-    local_texts = [doc.page_content[:300] for doc in local_results]
+    response = llm.invoke(prompt).content
 
-    # --- Step 2: Live web search ---
-    web_data = search.run(claim)  # returns summarized search text
-    # Split into pseudo "sources" (simulate multiple snippets)
-    snippet_chunks = [chunk.strip() for chunk in web_data.split("\n") if len(chunk.strip()) > 40][:k]
-
-    # --- Step 3: Identify credible & date-containing sources ---
-    credible_count = len([s for s in snippet_chunks if re.search(r"\.gov|\.edu|\.org|\.ac\.", s)])
-    date_pattern = r"(?:[A-Za-z]+\s\d{1,2},?\s(?:19|20)\d{2})|(?:\b(?:19|20)\d{2}\b)"
-    dates_found = re.findall(date_pattern, web_data)
-    latest_date = max(dates_found, default="Not mentioned")
-
-    support_ratio = credible_count / max(1, len(snippet_chunks))
-
-    # --- Step 4: LLM validation reasoning ---
-    reasoning_prompt = f"""
-    You are a factual claim validation system.
-
-    Claim: "{claim}"
-
-    Evidence from internal corpus:
-    {local_texts}
-
-    Web evidence snippets:
-    {snippet_chunks}
-
-    Found {len(snippet_chunks)} total results, {credible_count} credible sources.
-    Most recent mention: {latest_date}.
-
-    Based on this, decide:
-    - Is the claim supported, partially supported, or contradicted?
-    - Give a confidence score (0–1).
-    - Briefly justify your reasoning.
-    """
-
-    response = llm.invoke(reasoning_prompt).content
-
-    # --- Step 5: Confidence score extraction ---
+    # Try to extract numeric score
     match = re.search(r"(\d\.\d+)", response)
-    conf_score = float(match.group(1)) if match else (0.5 + 0.5 * support_ratio)
+    score = float(match.group(1)) if match else 0.5
 
     verdict = (
-        "✅ Strongly Supported" if conf_score >= 0.8 else
-        "⚠️ Partially Supported" if conf_score >= 0.5 else
-        "❌ Not Supported or Contradicted"
+        "✅ Consistent" if score <= 0.3 else
+        "⚠️ Partial Contradiction" if score <= 0.6 else
+        "❌ Strong Contradiction"
     )
 
-    # --- Step 6: Return result summary ---
     return (
-        f"🧾 Claim: {claim}\n\n"
-        f"🌐 Web Snippets Analyzed: {len(snippet_chunks)} | Credible: {credible_count}\n"
-        f"🕒 Latest Source Mention: {latest_date}\n"
-        f"📊 Support Ratio: {support_ratio:.2f}\n"
-        f"Verdict: {verdict}\n"
-        f"Confidence Score: {conf_score:.2f}\n\n"
+        f"🧾 Contradiction Analysis\n"
+        f"Number of Claims: {len(claims)}\n"
+        f"Score: {score:.2f}\n"
+        f"Verdict: {verdict}\n\n"
         f"🤖 LLM Reasoning:\n{response.strip()}"
     )
