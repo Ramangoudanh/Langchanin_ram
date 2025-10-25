@@ -1,39 +1,42 @@
-@MCP.tool("executive_summary_generator_tool")      # MCP registration
-@tool("executive_summary_generator_tool", return_direct=True)
-def executive_summary_generator_tool(validated_report: str, target_length: int = 150) -> str:
+@MCP.tool("query_decomposition_tool")
+def query_decomposition_tool(user_query: str) -> str:
     """
-    Generates a concise executive summary highlighting the most critical insights,
-    statistics, and recommendations from validated research data.
+    Breaks a complex research query into smaller, logically ordered sub-queries.
 
     Args:
-        validated_report (str): The full validated content or structured report text.
-        target_length (int): Desired word limit for the summary (default: 150 words).
+        user_query (str): The main research question from the user.
 
     Returns:
-        str: A polished executive summary paragraph suitable for publication or presentation.
+        str: A structured JSON-like list of decomposed sub-queries.
     """
 
     prompt = f"""
-    You are the Executive Summary Engine.
+    You are the Query Decomposition Engine for a research coordinator system.
 
-    Your task is to produce a clear, professional executive summary
-    based on the validated research report below.
+    Task:
+    - Decompose the following complex question into smaller, focused sub-queries.
+    - Each sub-query should be research-ready (can be handled by Agents 2 → 4).
+    - Maintain logical order of investigation (background → causes → effects → evidence → conclusions).
+    - Include short reasoning explaining why each sub-query is relevant.
+    - Output as a JSON structure with two fields:
+        "sub_queries": [ ... ],
+        "rationale": "brief explanation of decomposition logic".
 
-    ---
-    Report Content:
-    {validated_report}
-    ---
+    ### Input Query:
+    "{user_query}"
 
-    ### Instructions:
-    - Focus on the **main insights**, **quantitative highlights**, and **key conclusions**.
-    - Maintain a **neutral, academic tone** suitable for professional reports.
-    - Include up to 4 concise sentences, ~{target_length} words total.
-    - Avoid repeating headings or listing all sections.
-    - Conclude with a short forward-looking or recommendation statement.
-
-    Format the output as plain text, no markdown or bullets.
+    ### Output Example:
+    {{
+      "sub_queries": [
+         "What were the major government stimulus packages after COVID-19?",
+         "How did renewable energy investment trends change in Asia between 2020-2024?",
+         "What policy reforms supported green infrastructure financing post-COVID?",
+         "What were the measurable impacts on carbon-neutral targets?"
+      ],
+      "rationale": "Divided into economic policy, investment trends, regulatory changes, and environmental outcomes for holistic coverage."
+    }}
     """
 
     response = llm.invoke(prompt).content.strip()
 
-    return f"🪶 **Executive Summary:**\n\n{response}"
+    return f"🧩 **Query Decomposition Result:**\n\n{response}"
