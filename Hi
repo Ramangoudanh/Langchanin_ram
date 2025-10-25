@@ -1,58 +1,62 @@
-from langchain_community.tools import tool
-from langchain_openai import ChatOpenAI
-import re
-
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
-
-@tool("contradiction_detector", return_direct=True)
-def contradiction_detector(claims: list[str]) -> str:
+@tool("comparative_analysis_tool", return_direct=True)
+def comparative_analysis_tool(query_a: str, query_b: str, k: int = 3) -> str:
     """
-    Detects contradictions or inconsistencies among multiple factual statements.
+    Performs comparative analysis between two topics, datasets, or document sets.
+
+    Steps:
+      1. Retrieves top-k semantically related chunks for each query from PGVector.
+      2. Summarizes each set separately.
+      3. Uses LLM reasoning to highlight similarities, differences, and insights.
 
     Args:
-        claims (list[str]): A list of 2–10 factual claims or summary statements.
+        query_a (str): First concept/topic for comparison.
+        query_b (str): Second concept/topic for comparison.
+        k (int): Number of top documents to retrieve for each.
 
     Returns:
-        str: Analysis report with contradiction level and LLM reasoning.
+        str: Comparative summary (similarities, differences, key takeaways).
     """
-    if len(claims) < 2:
-        return "Need at least two claims to compare."
 
-    # Combine all claims into a structured prompt
-    claims_text = "\n".join([f"{i+1}. {c}" for i, c in enumerate(claims)])
+    # --- Step 1: Retrieve evidence for each topic ---
+    docs_a = vector_store.similarity_search(query_a, k=k)
+    docs_b = vector_store.similarity_search(query_b, k=k)
 
+    text_a = "\n".join([d.page_content[:400] for d in docs_a])
+    text_b = "\n".join([d.page_content[:400] for d in docs_b])
+
+    # --- Step 2: Comparative reasoning prompt ---
     prompt = f"""
-    You are a factual consistency analyst.
+    You are the Comparative Analysis Engine.
 
-    Analyze the following statements for agreement or contradiction:
+    Compare the following two knowledge sets and produce an analytical summary.
 
-    {claims_text}
+    --- Set A: {query_a} ---
+    {text_a}
 
-    Tasks:
-    1. Identify which statements agree and which conflict.
-    2. Rate the overall contradiction level on a 0–1 scale
-       (0 = perfectly consistent, 1 = highly contradictory).
-    3. Provide concise reasoning and examples of conflicts if any.
+    --- Set B: {query_b} ---
+    {text_b}
 
-    Return both a numeric contradiction score and your reasoning.
+    Task:
+      1. Identify core **similarities** (themes, facts, interpretations).
+      2. Identify **differences or contradictions**.
+      3. Highlight **contextual insights or implications**.
+      4. Provide a concise **summary paragraph** synthesizing findings.
+
+    Format your output clearly with sections:
+    - Similarities
+    - Differences
+    - Insights
+    - Summary
     """
 
     response = llm.invoke(prompt).content
 
-    # Try to extract numeric score
+    # --- Step 3: Optional confidence estimation from LLM output ---
     match = re.search(r"(\d\.\d+)", response)
-    score = float(match.group(1)) if match else 0.5
-
-    verdict = (
-        "✅ Consistent" if score <= 0.3 else
-        "⚠️ Partial Contradiction" if score <= 0.6 else
-        "❌ Strong Contradiction"
-    )
+    conf = float(match.group(1)) if match else 0.75
 
     return (
-        f"🧾 Contradiction Analysis\n"
-        f"Number of Claims: {len(claims)}\n"
-        f"Score: {score:.2f}\n"
-        f"Verdict: {verdict}\n\n"
-        f"🤖 LLM Reasoning:\n{response.strip()}"
+        f"🔍 Comparative Analysis between:\nA = {query_a}\nB = {query_b}\n\n"
+        f"Estimated Confidence: {conf:.2f}\n\n"
+        f"{response.strip()}"
     )
