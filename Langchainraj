@@ -1,28 +1,32 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+from langgraph.agents import create_agent
+from langchain_openai import ChatOpenAI
+from coordinator_state import ResearchCoordinatorState
 
-class SubQueryRecord(BaseModel):
-    id: int
-    text: str                        # the sub-query itself
-    priority: int                    # lower = run earlier
-    status: str = "pending"          # pending | running | completed | failed
-    routed_path: Optional[List[str]] = None   # e.g. ["node2","node4"] or ["node3","node4"]
-    answer: Optional[str] = None
-    sources: Optional[List[Dict[str, Any]]] = None
-      # each source: { "url": "...", "title": "...", "last_updated": "...", "credibility_score": 0.85 }
-    confidence: Optional[float] = None
-    notes: Optional[str] = None      # e.g. "LLM-derived due to weak evidence"
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.25)
 
-class ResearchCoordinatorState(BaseModel):
-    user_query: str
-    sub_queries: List[SubQueryRecord] = []
-    next_subquery_id: Optional[int] = None
-    overall_progress_pct: float = 0.0   # computed from sub_queries statuses
-    remaining_subqueries: int = 0       # convenience field
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
-    final_report: Optional[str] = None
-    workflow_status: str = "in-progress"  # in-progress | completed | failed
+agent1 = create_agent(
+    name="ResearchCoordinatorAgent",
+    description="Master orchestrator that decomposes the query, assigns execution order, and controls progress of all sub-queries.",
+    llm=llm,
+    state_type=ResearchCoordinatorState,
+    verbose=True,
+    system_prompt="""
+You are **Agent 1 – Research Coordinator Agent**.
+Your role is to manage the full workflow for a research query.
+
+### What you do
+1️⃣ Decompose the user’s main question into sub-queries.  
+2️⃣ Decide execution order (priority).  
+3️⃣ Classify each sub-query:
+   - **Simple factual / short / definition-type** → route to ["node2","node4"]
+   - **Descriptive / comparative / trend / causal** → route to ["node3","node4"]
+4️⃣ Track which sub-queries are completed and their answers.
+5️⃣ When all are done → send to **node5** to build the structured final report.
+
+### Behavior
+- Always reason step-by-step.
+- Keep state updated per-sub-query: `status`, `answer`, `sources`, `confidence`.
+- When `remaining_subqueries == 0` → `next_node = "node5"`.
+- Output only structured JSON.
+"""
+)
