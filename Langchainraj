@@ -1,32 +1,97 @@
-from langgraph.agents import create_agent
-from langchain_openai import ChatOpenAI
-from coordinator_state import ResearchCoordinatorState
+import json
+from datetime import datetime
+from uuid import uuid4
+from coordinator_state import SubQueryRecord, ResearchCoordinatorState
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.25)
-
-agent1 = create_agent(
-    name="ResearchCoordinatorAgent",
-    description="Master orchestrator that decomposes the query, assigns execution order, and controls progress of all sub-queries.",
-    llm=llm,
-    state_type=ResearchCoordinatorState,
-    verbose=True,
-    system_prompt="""
-You are **Agent 1 – Research Coordinator Agent**.
-Your role is to manage the full workflow for a research query.
-
-### What you do
-1️⃣ Decompose the user’s main question into sub-queries.  
-2️⃣ Decide execution order (priority).  
+@agent1.node("query_decomposition_and_order_node", entrypoint=True, prompt="""
+🧭 ROLE: You are the **Query Decomposition & Execution Order Node** inside Agent 1.
+You must:
+1️⃣ Break the user’s question into smaller, logical sub-queries.  
+2️⃣ Assign a priority order (1 = run first).  
 3️⃣ Classify each sub-query:
-   - **Simple factual / short / definition-type** → route to ["node2","node4"]
-   - **Descriptive / comparative / trend / causal** → route to ["node3","node4"]
-4️⃣ Track which sub-queries are completed and their answers.
-5️⃣ When all are done → send to **node5** to build the structured final report.
+   - short factual → route ["node2","node4"]
+   - descriptive / analytical → route ["node3","node4"]
+4️⃣ Return structured JSON.
 
-### Behavior
-- Always reason step-by-step.
-- Keep state updated per-sub-query: `status`, `answer`, `sources`, `confidence`.
-- When `remaining_subqueries == 0` → `next_node = "node5"`.
-- Output only structured JSON.
-"""
-)
+### OUTPUT FORMAT
+{
+  "sub_queries": [
+    {"id":1,"text":"...","priority":1,"routed_path":["node2","node4"]},
+    {"id":2,"text":"...","priority":2,"routed_path":["node3","node4"]}
+  ],
+  "rationale":"Why you broke them this way and how you chose order and routing."
+}
+""")
+@agent1.node("query_decomposition_and_order_node", entrypoint=True, prompt="(same prompt as before)")
+def query_decomposition_and_order_node(state: ResearchCoordinatorState) -> ResearchCoordinatorState:
+    print("\n🧭 [Agent 1 – Node 1] Orchestrator wake-up...")
+
+    # --- Phase 1: Initial decomposition (if first run) ---
+    if not state.sub_queries or len(state.sub_queries) == 0:
+        print("🧩 Initial decomposition...")
+        llm_input = f"""
+        Main research question:
+        {state.user_query}
+        Follow your node instructions exactly and return JSON only.
+        """
+        response = agent1.llm.invoke(llm_input).content.strip()
+        try:
+            parsed = json.loads(response)
+            raw_queries = parsed.get("sub_queries", [])
+            rationale = parsed.get("rationale", "")
+        except Exception:
+            raw_queries, rationale = [], "Fallback parsing."
+
+        # Build sub-query records
+        sub_records = []
+        for q in raw_queries:
+            sub_records.append(
+                SubQueryRecord(
+                    id=q.get("id", len(sub_records) + 1),
+                    text=q.get("text"),
+                    priority=q.get("priority", len(sub_records) + 1),
+                    routed_path=q.get("routed_path", ["node2","node4"]),
+                    status="pending"
+                )
+            )
+        sub_records.sort(key=lambda x: x.priority)
+
+        state.sub_queries = sub_records
+        state.remaining_subqueries = len(sub_records)
+        state.overall_progress_pct = 0.0
+        state.next_subquery_id = sub_records[0].id if sub_records else None
+        state.last_updated = datetime.utcnow()
+        print(f"✅ Created {len(sub_records)} sub-queries.")
+    else:
+        print("♻️ Continuing existing workflow — checking next pending sub-query...")
+
+    # --- Phase 2: Find next pending sub-query ---
+    pending = [s for s in state.sub_queries if s.status != "completed"]
+    if not pending:
+        print("🎯 All sub-queries completed → move to node5 (report synthesis).")
+        state.next_node = "node5"
+        state.overall_progress_pct = 100.0
+        state.remaining_subqueries = 0
+        return state
+
+    # Pick next sub-query
+    next_sq = sorted(pending, key=lambda s: s.priority)[0]
+    next_sq.status = "running"
+    next_sq.started_at = datetime.utcnow()
+    state.next_subquery_id = next_sq.id
+
+    # Update progress
+    completed = len([s for s in state.sub_queries if s.status == "completed"])
+    total = len(state.sub_queries)
+    state.remaining_subqueries = total - completed
+    state.overall_progress_pct = 100 * completed / total
+    state.last_updated = datetime.utcnow()
+
+    # Decide routing path
+    first_path = next_sq.routed_path[0]
+    state.next_node = first_path
+
+    print(f"➡️ Next sub-query #{next_sq.id}: '{next_sq.text}' via {first_path}")
+    print(f"📊 Progress: {completed}/{total} done ({state.overall_progress_pct:.1f}%)")
+
+    return state
