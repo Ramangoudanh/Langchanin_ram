@@ -1,0 +1,52 @@
+@MCP.tool("citation_formatter_tool")   # ✅ Register for MCP use
+@tool("citation_formatter_tool", return_direct=True)
+def citation_formatter_tool(raw_references: list[str], style: str = "APA") -> str:
+    """
+    Converts a list of raw references (URLs, snippets, or text) into
+    standardized academic citations using a chosen format (APA, MLA, or IEEE).
+
+    Args:
+        raw_references (list[str]): A list of raw citation inputs (URLs or text).
+        style (str): Citation style ("APA", "MLA", "IEEE"). Default is APA.
+
+    Returns:
+        str: Formatted citations in the specified academic style.
+    """
+
+    # --- Step 1: Clean & aggregate references ---
+    if not raw_references:
+        return "⚠️ No references provided for formatting."
+
+    formatted_input = "\n".join([f"- {ref}" for ref in raw_references])
+
+    # --- Step 2: LLM formatting prompt ---
+    prompt = f"""
+    You are a citation formatting engine.
+
+    Format the following references into proper {style} citation style.
+    Correctly infer missing details (like author, year, or source title)
+    when possible from the URL or context.
+
+    ### Input References:
+    {formatted_input}
+
+    ### Output Rules:
+    - Strictly use {style} academic format.
+    - Each entry should be on a new line.
+    - Include title, author (if available), year, and source/site name.
+    - If URL-only reference, infer title and site name intelligently.
+
+    Example Output (APA Style):
+    [1] International Energy Agency. (2024). *Global Energy Review 2024*. Retrieved from https://iea.org/reports/global-energy-review-2024
+
+    Now format the citations below accordingly.
+    """
+
+    response = llm.invoke(prompt).content
+
+    # --- Step 3: Basic cleanup ---
+    formatted_output = re.sub(r"\n{3,}", "\n\n", response.strip())
+
+    return (
+        f"📚 **Formatted Citations ({style} Style):**\n\n{formatted_output}"
+    )
