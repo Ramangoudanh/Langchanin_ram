@@ -1,0 +1,94 @@
+web_retrieval_prompt = """
+🌐 ROLE: You are the **Web Retrieval & Document Gathering Node** (Node 2) of Agent 1.
+
+---
+
+### 🎯 OBJECTIVE
+1️⃣ Receive one specific sub-query from state.  
+2️⃣ Collect relevant information from the web and/or internal vector DB.  
+3️⃣ Return the gathered snippets, brief summaries, and source metadata  
+   (URLs, titles, dates) for the validation node to evaluate later.
+
+---
+
+### 🧰 HOW TO THINK
+- Search the web and trustworthy sources (news, academic, .gov, .org, .edu, etc.).  
+- Summarize results objectively—no reasoning or analysis here.  
+- Your goal is to provide **raw material** and **references**, not final answers.  
+- If little or no credible data is found, still return whatever minimal context exists.  
+- Never make up statistics; if data missing → mark `"data_gap": true`.
+
+---
+
+### 🧩 OUTPUT FORMAT (JSON ONLY)
+{
+  "retrieval_payload": {
+    "sub_query_id": <id>,
+    "query_text": "...",
+    "snippets": [
+      {"url": "...", "title": "...", "snippet": "...", "last_updated": "2024-08-10"},
+      ...
+    ],
+    "summary": "Brief plain-text overview of what was found (2–4 lines).",
+    "data_gap": false
+  }
+}
+
+---
+
+### ⚖️ RULES
+- Output valid JSON only — no markdown, no commentary.  
+- Do not analyze or verify; that’s Node 4’s job.  
+- Keep total text concise (< 1 KB).  
+- If you detect conflicting info already inside retrieved snippets, set `"data_gap": true`.
+"""
+import json
+from datetime import datetime
+
+@agent1.node("node2", prompt=web_retrieval_prompt)
+def node2_web_retrieval(state: ResearchCoordinatorState) -> ResearchCoordinatorState:
+    """
+    Node 2 – Retrieves factual or short-answer information for the current sub-query.
+    """
+
+    print("\n🌐 [Agent 1 – Node 2] Running Web Retrieval Node...")
+
+    # Locate the sub-query currently marked as running
+    current = next((sq for sq in state.sub_queries if sq.status == "running"), None)
+    if not current:
+        print("⚠️ No active sub-query found.")
+        state.next_node = "query_decomposition_and_order_node"
+        return state
+
+    # Build retrieval instruction for LLM (or retrieval tool behind LLM)
+    llm_input = f"""
+    Sub-query ID: {current.id}
+    Question: {current.text}
+    Please perform retrieval according to node instructions and return JSON only.
+    """
+
+    response = agent1.llm.invoke(llm_input).content.strip()
+
+    # Parse JSON output
+    try:
+        payload = json.loads(response)["retrieval_payload"]
+    except Exception:
+        payload = {
+            "sub_query_id": current.id,
+            "query_text": current.text,
+            "snippets": [],
+            "summary": "Retrieval failed – no data.",
+            "data_gap": True
+        }
+
+    # Temporarily store raw retrieval in the sub-query record
+    current.sources = payload.get("snippets", [])
+    current.notes = payload.get("summary", "")
+    current.status = "retrieved"
+    state.last_updated = datetime.utcnow()
+
+    print(f"✅ Retrieved {len(current.sources)} snippets for sub-query #{current.id}.")
+    # Route automatically to Node 4 (validation & credibility)
+    state.next_node = "node4"
+
+    return state
