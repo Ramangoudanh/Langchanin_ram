@@ -1,0 +1,126 @@
+credibility_validation_prompt = """
+🧩 ROLE: You are the **Credibility & Validation Node (Node 4)** inside Agent 1.
+
+You receive evidence (retrieved or analyzed content) for one sub-query.
+Your job is to cross-check sources, assess credibility, and decide if the result can be trusted.
+
+---
+
+### 🎯 OBJECTIVE
+1️⃣ Evaluate the quality of evidence and consistency of data.  
+2️⃣ Identify credible domains (.gov, .org, .edu, .ac, peer-reviewed, etc.).  
+3️⃣ Detect contradictions between sources.  
+4️⃣ Compute a confidence score (0–1).  
+5️⃣ If low confidence (< 0.7), use LLM reasoning to generate a cautious, credible summary answer,
+   explicitly mentioning gaps or uncertainty.
+
+---
+
+### 🧠 INPUT
+{
+  "sub_query_id": <id>,
+  "question": "...",
+  "sources": [
+    {"url": "...", "snippet": "...", "title": "...", "last_updated": "..."},
+    ...
+  ],
+  "analysis_output": "..."  (optional, from Node 3)
+}
+
+---
+
+### 🧩 OUTPUT FORMAT (strict JSON)
+{
+  "validated_answer": {
+    "sub_query_id": <id>,
+    "question": "...",
+    "final_answer": "...",
+    "sources_used": [
+      {"url": "...", "credibility_score": 0.9, "last_updated": "2024-09-12"}
+    ],
+    "confidence": 0.87,
+    "credibility_level": "high",
+    "notes": "Answer derived from 3 credible government and energy agency sources."
+  }
+}
+
+---
+
+### ⚖️ RULES
+- Return valid JSON only — no markdown.  
+- Compute confidence as a function of source credibility + consistency.  
+- If contradictory or missing data → lower confidence.  
+- If confidence < 0.7 → generate LLM-derived summary answer with disclaimer in notes.  
+- Be concise but structured.
+"""
+import json
+from datetime import datetime
+
+@agent1.node("node4", prompt=credibility_validation_prompt)
+def node4_validation_node(state: ResearchCoordinatorState) -> ResearchCoordinatorState:
+    """
+    Node 4 – Cross-references evidence, validates credibility, and finalizes the answer for the sub-query.
+    """
+
+    print("\n🧩 [Agent 1 – Node 4] Validating credibility and confidence...")
+
+    # Identify currently active sub-query
+    current = next((sq for sq in state.sub_queries if sq.status in ["retrieved", "analyzed"]), None)
+    if not current:
+        print("⚠️ No retrieved or analyzed sub-query found.")
+        state.next_node = "query_decomposition_and_order_node"
+        return state
+
+    # Build structured input for LLM
+    llm_input = {
+        "sub_query_id": current.id,
+        "question": current.text,
+        "sources": current.sources or [],
+        "analysis_output": getattr(current, "analysis_output", None)
+    }
+
+    llm_response = agent1.llm.invoke(
+        f"Validate the following evidence according to your node instructions:\n{json.dumps(llm_input, indent=2)}"
+    ).content.strip()
+
+    # Parse the LLM output
+    try:
+        validated = json.loads(llm_response)["validated_answer"]
+    except Exception:
+        # fallback default
+        validated = {
+            "sub_query_id": current.id,
+            "question": current.text,
+            "final_answer": "Unable to validate; generating fallback summary.",
+            "sources_used": current.sources or [],
+            "confidence": 0.6,
+            "credibility_level": "low",
+            "notes": "Fallback: insufficient structured JSON from LLM."
+        }
+
+    # --- Update sub-query in state ---
+    current.answer = validated.get("final_answer", "No answer")
+    current.sources = validated.get("sources_used", [])
+    current.confidence = validated.get("confidence", 0.5)
+    current.status = "completed"
+    current.finished_at = datetime.utcnow()
+    current.notes = validated.get("notes", "")
+
+    # --- Compute progress ---
+    completed = len([s for s in state.sub_queries if s.status == "completed"])
+    total = len(state.sub_queries)
+    state.remaining_subqueries = total - completed
+    state.overall_progress_pct = 100 * completed / total
+    state.last_updated = datetime.utcnow()
+
+    print(f"✅ Sub-query #{current.id} validated with confidence {current.confidence:.2f}.")
+    print(f"📊 Progress: {completed}/{total} completed ({state.overall_progress_pct:.1f}%)")
+
+    # --- Route back to Node 1 (loop control) ---
+    if state.remaining_subqueries > 0:
+        state.next_node = "query_decomposition_and_order_node"
+    else:
+        print("🎯 All sub-queries validated → move to Node 5 (report assembly).")
+        state.next_node = "node5"
+
+    return state
