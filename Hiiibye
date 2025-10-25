@@ -1,52 +1,39 @@
-@MCP.tool("citation_formatter_tool")   # ✅ Register for MCP use
-@tool("citation_formatter_tool", return_direct=True)
-def citation_formatter_tool(raw_references: list[str], style: str = "APA") -> str:
+@MCP.tool("executive_summary_generator_tool")      # MCP registration
+@tool("executive_summary_generator_tool", return_direct=True)
+def executive_summary_generator_tool(validated_report: str, target_length: int = 150) -> str:
     """
-    Converts a list of raw references (URLs, snippets, or text) into
-    standardized academic citations using a chosen format (APA, MLA, or IEEE).
+    Generates a concise executive summary highlighting the most critical insights,
+    statistics, and recommendations from validated research data.
 
     Args:
-        raw_references (list[str]): A list of raw citation inputs (URLs or text).
-        style (str): Citation style ("APA", "MLA", "IEEE"). Default is APA.
+        validated_report (str): The full validated content or structured report text.
+        target_length (int): Desired word limit for the summary (default: 150 words).
 
     Returns:
-        str: Formatted citations in the specified academic style.
+        str: A polished executive summary paragraph suitable for publication or presentation.
     """
 
-    # --- Step 1: Clean & aggregate references ---
-    if not raw_references:
-        return "⚠️ No references provided for formatting."
-
-    formatted_input = "\n".join([f"- {ref}" for ref in raw_references])
-
-    # --- Step 2: LLM formatting prompt ---
     prompt = f"""
-    You are a citation formatting engine.
+    You are the Executive Summary Engine.
 
-    Format the following references into proper {style} citation style.
-    Correctly infer missing details (like author, year, or source title)
-    when possible from the URL or context.
+    Your task is to produce a clear, professional executive summary
+    based on the validated research report below.
 
-    ### Input References:
-    {formatted_input}
+    ---
+    Report Content:
+    {validated_report}
+    ---
 
-    ### Output Rules:
-    - Strictly use {style} academic format.
-    - Each entry should be on a new line.
-    - Include title, author (if available), year, and source/site name.
-    - If URL-only reference, infer title and site name intelligently.
+    ### Instructions:
+    - Focus on the **main insights**, **quantitative highlights**, and **key conclusions**.
+    - Maintain a **neutral, academic tone** suitable for professional reports.
+    - Include up to 4 concise sentences, ~{target_length} words total.
+    - Avoid repeating headings or listing all sections.
+    - Conclude with a short forward-looking or recommendation statement.
 
-    Example Output (APA Style):
-    [1] International Energy Agency. (2024). *Global Energy Review 2024*. Retrieved from https://iea.org/reports/global-energy-review-2024
-
-    Now format the citations below accordingly.
+    Format the output as plain text, no markdown or bullets.
     """
 
-    response = llm.invoke(prompt).content
+    response = llm.invoke(prompt).content.strip()
 
-    # --- Step 3: Basic cleanup ---
-    formatted_output = re.sub(r"\n{3,}", "\n\n", response.strip())
-
-    return (
-        f"📚 **Formatted Citations ({style} Style):**\n\n{formatted_output}"
-    )
+    return f"🪶 **Executive Summary:**\n\n{response}"
