@@ -1,71 +1,79 @@
-@MCP.tool("causal_reasoning_tool")  # <-- MCP registration for interoperability
-@tool("causal_reasoning_tool", return_direct=True)
-def causal_reasoning_tool(topic: str, k: int = 5) -> str:
+@MCP.tool("statistical_analysis_tool")          # <-- MCP registry
+@tool("statistical_analysis_tool", return_direct=True)
+def statistical_analysis_tool(topic: str, k: int = 5) -> str:
     """
-    Detects and explains cause-effect relationships for a given topic or event.
-
-    Steps:
-      1. Retrieves relevant data/documents from PGVector.
-      2. Extracts causal connectors (e.g. "because", "due to", "led to").
-      3. Uses LLM reasoning to construct a cause-effect chain.
-      4. Outputs both textual explanation and structured reasoning graph.
+    Extracts and summarizes numerical information (percentages, growth, ratios)
+    from relevant documents to produce a quantitative insight summary.
 
     Args:
-        topic (str): Subject/event to analyze causality for.
-        k (int): Number of top documents to analyze.
+        topic (str): The subject or dataset to analyze statistically.
+        k (int): Number of top retrieved docs.
 
     Returns:
-        str: Structured causal reasoning summary.
+        str: Statistical summary including key figures, averages, and insights.
     """
 
-    # --- Step 1: Retrieve contextual evidence ---
+    # --- Step 1: Retrieve documents from vector DB ---
     docs = vector_store.similarity_search(topic, k=k)
-    evidence_text = "\n".join([d.page_content[:500] for d in docs])
+    corpus = "\n".join([d.page_content[:600] for d in docs])
 
-    # --- Step 2: Extract direct causal cues from text ---
-    causal_snippets = []
-    for sentence in evidence_text.split("."):
-        if any(connector in sentence.lower() for connector in ["because", "due to", "led to", "as a result", "therefore"]):
-            causal_snippets.append(sentence.strip())
+    # --- Step 2: Extract numeric values from text ---
+    numbers = re.findall(r"\b\d+(?:\.\d+)?%?\b", corpus)
+    clean_numbers = []
+    for n in numbers:
+        try:
+            clean_numbers.append(float(n.replace("%", "")))
+        except:
+            continue
 
-    causal_text = "\n".join(causal_snippets[:10]) if causal_snippets else "No explicit causal statements detected."
+    # --- Step 3: Compute basic statistics (if enough numeric data) ---
+    stats_summary = ""
+    if clean_numbers:
+        avg_val = statistics.mean(clean_numbers)
+        med_val = statistics.median(clean_numbers)
+        rng_val = max(clean_numbers) - min(clean_numbers)
+        stats_summary = (
+            f"Found {len(clean_numbers)} numeric values.\n"
+            f"Average ≈ {avg_val:.2f}\n"
+            f"Median ≈ {med_val:.2f}\n"
+            f"Range ≈ {rng_val:.2f}\n"
+        )
+    else:
+        stats_summary = "No clear numeric patterns extracted from the dataset."
 
-    # --- Step 3: LLM-based causal inference ---
+    # --- Step 4: LLM-driven interpretation ---
     prompt = f"""
-    You are the Causal Reasoning Engine.
-
-    Analyze the following topic for cause-effect relationships.
+    You are the Statistical Analysis Engine.
 
     Topic: {topic}
 
-    Relevant text evidence:
-    {evidence_text}
+    Extracted numeric data:
+    {stats_summary}
 
-    Extracted causal clues:
-    {causal_text}
+    Text corpus:
+    {corpus}
 
     Tasks:
-      1. Identify primary causes and their effects.
-      2. Describe causal chain (A → B → C) if present.
-      3. Summarize key drivers behind the observed outcomes.
-      4. Estimate causal confidence (0–1).
-      5. Output in this format:
+      1. Identify what these numbers represent (growth rate, count, ratio, etc.).
+      2. Summarize quantitative trends or anomalies.
+      3. Provide a short analytical paragraph explaining the statistical meaning.
+      4. Estimate a confidence score (0–1).
 
-      **Causal Factors:** ...
-      **Effects/Outcomes:** ...
-      **Causal Chain:** ...
+    Output format:
+      **Key Statistics:** ...
+      **Interpretation:** ...
       **Summary:** ...
       **Confidence:** ...
     """
 
     response = llm.invoke(prompt).content
 
-    # --- Step 4: Parse confidence if mentioned ---
+    # --- Step 5: Parse optional numeric confidence ---
     match = re.search(r"(\d\.\d+)", response)
-    conf_score = float(match.group(1)) if match else 0.75
+    conf_score = float(match.group(1)) if match else 0.8
 
     return (
-        f"🔗 Causal Reasoning for: '{topic}'\n"
+        f"📊 Statistical Analysis for: '{topic}'\n"
         f"Confidence ≈ {conf_score:.2f}\n\n"
         f"{response.strip()}"
     )
