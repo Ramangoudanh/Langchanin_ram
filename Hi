@@ -1,85 +1,28 @@
-from langchain_community.tools import tool
-from langchain_postgres import PGVector
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain_community.document_loaders import WebBaseLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.prompts import PromptTemplate
 
-# -------------------------------
-# 1. Database Setup (PGVector)
-# -------------------------------
-connection_string = "postgresql+psycopg2://username:password@localhost:5432/vector_db"
+retrieval_prompt = PromptTemplate.from_template("""
+You are **Agent 2: Web Scraper & Document Retrieval Agent**.
 
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+Your role is to handle all **Retrieval-Augmented Generation (RAG)** operations.
+You are responsible for scraping the web, managing the knowledge base, and retrieving
+relevant context for deeper analysis by other agents.
 
-vector_store = PGVector(
-    connection=connection_string,
-    embeddings=embeddings,
-    collection_name="research_documents",
-    use_jsonb=True
-)
+### Your Tools:
+1. **web_scraper(url)** — Scrape a website and store text into the vector database.
+2. **semantic_scraping_search(query)** — Search semantically across stored data.
+3. **keyword_search(keyword)** — Quickly find documents using keywords.
 
-# -------------------------------
-# 2. Web Tool — Basic Scraper
-# -------------------------------
-@tool("web_scraper", return_direct=True)
-def web_scraper(url: str) -> str:
-    """
-    Scrapes content from the provided URL, splits it into chunks,
-    and stores it in the PGVector collection for future semantic retrieval.
+### Instructions:
+- If the user provides a **URL**, use the `web_scraper` tool to scrape and store data.
+- If the user provides a **question or research topic**, first try `semantic_scraping_search`.
+- If semantic search yields limited data or user asks for direct text match, use `keyword_search`.
+- Always summarize retrieved data into clean, concise research notes.
+- Never make assumptions without retrieved evidence.
 
-    Args:
-        url (str): The website URL to scrape.
+---
 
-    Returns:
-        str: Summary of scraping operation.
-    """
-    loader = WebBaseLoader(url)
-    documents = loader.load()
+Query or Task:
+{input}
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = splitter.split_documents(documents)
-
-    vector_store.add_documents(chunks)
-    return f"✅ Scraped and indexed {len(chunks)} chunks from {url}"
-
-# -------------------------------
-# 3. Semantic Scraping Search Tool
-# -------------------------------
-@tool("semantic_scraping_search", return_direct=True)
-def semantic_scraping_search(query: str, k: int = 5) -> str:
-    """
-    Performs semantic search over the scraped documents stored in PGVector.
-
-    Args:
-        query (str): The user query.
-        k (int): Number of top relevant results to return.
-
-    Returns:
-        str: Combined content of top matching documents.
-    """
-    results = vector_store.similarity_search(query, k=k)
-    if not results:
-        return "No relevant information found."
-    
-    return "\n\n---\n\n".join([doc.page_content for doc in results])
-
-# -------------------------------
-# 4. Keyword Search Tool
-# -------------------------------
-@tool("keyword_search", return_direct=True)
-def keyword_search(keyword: str) -> str:
-    """
-    Performs simple keyword-based search on document metadata or text content.
-
-    Args:
-        keyword (str): Keyword to search for.
-
-    Returns:
-        str: Matched document contents or message if none found.
-    """
-    results = vector_store.similarity_search_with_score(keyword, k=10)
-    filtered = [doc.page_content for doc, score in results if keyword.lower() in doc.page_content.lower()]
-
-    if not filtered:
-        return f"No documents found containing keyword: {keyword}"
-    return "\n\n---\n\n".join(filtered[:5])
+Now decide the best tool to use and perform the retrieval operation.
+""")
