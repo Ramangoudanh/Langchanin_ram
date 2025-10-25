@@ -1,0 +1,115 @@
+from langchain_postgres import PGVector
+from langchain.schema import Document
+from openai import OpenAI
+import firecrawl
+from datetime import datetime
+
+# --------------------------
+# Configuration
+# --------------------------
+OPENAI_KEY = "YOUR_OPENAI_API_KEY"
+FIRECRAWL_KEY = "YOUR_FIRECRAWL_KEY"
+PGVECTOR_URL = "postgresql+psycopg2://postgres:123@localhost:5432/ragdb"
+
+# Initialize clients
+client = OpenAI(api_key=OPENAI_KEY)
+fire = firecrawl.FirecrawlClient(api_key=FIRECRAWL_KEY)
+
+# Initialize PGVector
+vector_store = PGVector(
+    connection_string=PGVECTOR_URL,
+    collection_name="webscraper_knowledge",
+    embedding_function=lambda texts: [
+        client.embeddings.create(input=t, model="text-embedding-3-small").data[0].embedding
+        for t in texts
+    ],
+    use_jsonb=True
+)
+
+# --------------------------
+# Scraper + Vector Store Tool
+# --------------------------
+
+def semantic_scraper_and_vector_tool(payload):
+    """
+    Scrape and add data about a query into PGVector, then return semantic results.
+    Input:
+    {
+      "query": "AI regulation Europe 2024",
+      "max_results": 5,
+      "top_k": 3
+    }
+    """
+    query = payload.get("query")
+    max_results = payload.get("max_results", 5)
+    top_k = payload.get("top_k", 3)
+
+    if not query:
+        return {"status": "error", "tool": "semantic_scraper_and_vector_tool", "error": "Missing query"}
+
+    # 1️⃣ Search using Firecrawl
+    search_results = fire.search(query, max_results=max_results)
+    if not search_results:
+        return {"status": "error", "tool": "semantic_scraper_and_vector_tool", "error": "No search results"}
+
+    scraped_docs = []
+
+    # 2️⃣ Scrape each search result
+    for item in search_results:
+        url = item.get("url")
+        if not url:
+            continue
+
+        try:
+            result = fire.scrape_url(url=url, include_links=False, depth=0, output="json")
+            content = result.get("content", "")
+            title = result.get("title", "Untitled")
+
+            if len(content.split()) < 80:  # skip low-content pages
+                continue
+
+            # Prepare LangChain Document for PGVector
+            doc = Document(
+                page_content=content,
+                metadata={
+                    "url": url,
+                    "title": title,
+                    "source": "firecrawl",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+            scraped_docs.append(doc)
+        except Exception as e:
+            print(f"Error scraping {url}: {e}")
+
+    # 3️⃣ Add scraped documents into PGVector
+    if scraped_docs:
+        vector_store.add_documents(scraped_docs)
+
+    # 4️⃣ Perform semantic search in PGVector
+    query_embedding = client.embeddings.create(
+        input=query,
+        model="text-embedding-3-small"
+    ).data[0].embedding
+
+    search_results = vector_store.similarity_search_with_score_by_vector(
+        embedding=query_embedding,
+        k=top_k
+    )
+
+    formatted_results = []
+    for doc, score in search_results:
+        formatted_results.append({
+            "content_snippet": doc.page_content[:300] + "...",
+            "metadata": doc.metadata,
+            "similarity_score": float(score)
+        })
+
+    # 5️⃣ Return structured MCP-style response
+    return {
+        "status": "success",
+        "tool": "semantic_scraper_and_vector_tool",
+        "query": query,
+        "documents_added": len(scraped_docs),
+        "results": formatted_results
+    }
