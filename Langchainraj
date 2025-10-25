@@ -1,224 +1,83 @@
-Perfect 👍 you want **LangChain-style `@tool` decorators**, not `BaseTool` classes — simple functional tools that can later be plugged into an agent.
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional
+from datetime import datetime
 
-Let’s build all **4 tools (`ReminderTool`, `ToDoListTool`, `WeatherTool`, `SearchTool`)** using `@tool` from `langchain.tools`.
-We’ll use minimal clean functions — **no agents yet**, just callable tools.
-
----
-
-### 📁 Project structure
-
-```
-langchain_tools/
-│
-├── main.py
-├── tools/
-│   ├── reminder_tool.py
-│   ├── todo_tool.py
-│   ├── weather_tool.py
-│   └── search_tool.py
-│
-├── data/
-│   ├── reminders.json
-│   └── todos.json
-│
-└── .env   # contains OPENWEATHER_API_KEY
-```
-
----
-
-### 🧩 `tools/reminder_tool.py`
-
-```python
-import json
-import os
-from langchain.tools import tool
-
-DATA_PATH = "data/reminders.json"
-os.makedirs("data", exist_ok=True)
-if not os.path.exists(DATA_PATH):
-    with open(DATA_PATH, "w") as f:
-        json.dump([], f)
-
-@tool("reminder_tool", return_direct=True)
-def reminder_tool(action: str, reminder: str = None) -> str:
+class ResearchCoordinatorState(BaseModel):
     """
-    Manage reminders.
-    action: 'add', 'list', 'delete'
-    reminder: text of reminder (required for add/delete)
+    Central workflow state for Agent 1 (Research Coordinator Agent).
+    This tracks the entire multi-agent research pipeline.
     """
-    with open(DATA_PATH, "r") as f:
-        reminders = json.load(f)
 
-    if action == "add" and reminder:
-        reminders.append(reminder)
-        with open(DATA_PATH, "w") as f:
-            json.dump(reminders, f, indent=2)
-        return f"✅ Reminder added: {reminder}"
+    # --- 🔹 User Input ---
+    user_query: str = Field(..., description="The main research query provided by the user.")
 
-    elif action == "list":
-        if not reminders:
-            return "No reminders found."
-        return "\n".join([f"{i+1}. {r}" for i, r in enumerate(reminders)])
+    # --- 🔹 Node 1 Output: Query Decomposition ---
+    decomposed_subqueries: Optional[List[str]] = Field(
+        default=None,
+        description="List of smaller sub-queries generated from the main query."
+    )
 
-    elif action == "delete" and reminder:
-        if reminder in reminders:
-            reminders.remove(reminder)
-            with open(DATA_PATH, "w") as f:
-                json.dump(reminders, f, indent=2)
-            return f"🗑️ Reminder deleted: {reminder}"
-        else:
-            return "Reminder not found."
+    # --- 🔹 Node 2 Output: Task Prioritization ---
+    task_plan: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="List of tasks with assigned agents and execution order."
+    )
 
-    return "Invalid action or missing reminder."
-```
+    # --- 🔹 Node 3 Output: Progress Tracking ---
+    progress_status: Optional[Dict[str, Dict[str, str]]] = Field(
+        default_factory=dict,
+        description="Tracks each agent’s current status and timestamp."
+    )
+    overall_completion: float = Field(
+        default=0.0,
+        description="Overall workflow completion percentage (0–100)."
+    )
 
----
+    # --- 🔹 Intermediate Outputs from Other Agents (2–5) ---
+    retrieval_summary: Optional[str] = Field(
+        default=None,
+        description="Summary of data collected by Agent 2 (Web Scraper & Document Retrieval)."
+    )
+    deep_analysis: Optional[str] = Field(
+        default=None,
+        description="Analytical findings from Agent 3 (Deep Analysis)."
+    )
+    validation_report: Optional[str] = Field(
+        default=None,
+        description="Fact-checking results from Agent 4 (Validation)."
+    )
+    formatted_report: Optional[str] = Field(
+        default=None,
+        description="Formatted structured report from Agent 5 (Formatting)."
+    )
+    executive_summary: Optional[str] = Field(
+        default=None,
+        description="Short summary from Agent 5 (Executive Summary Generator)."
+    )
 
-### 🧩 `tools/todo_tool.py`
+    # --- 🔹 Node 4 Output: Final Synthesis ---
+    final_report: Optional[str] = Field(
+        default=None,
+        description="Merged final report created in the synthesis step."
+    )
+    confidence_score: Optional[float] = Field(
+        default=None,
+        description="Aggregate confidence score derived from the validation agent."
+    )
 
-```python
-import json
-import os
-from langchain.tools import tool
+    # --- 🔹 System Metadata ---
+    next_node: Optional[str] = Field(
+        default=None,
+        description="Indicates which node should run next in the workflow."
+    )
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="Timestamp when the workflow started."
+    )
+    last_updated: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="Last time the state was updated."
+    )
 
-DATA_PATH = "data/todos.json"
-os.makedirs("data", exist_ok=True)
-if not os.path.exists(DATA_PATH):
-    with open(DATA_PATH, "w") as f:
-        json.dump([], f)
-
-@tool("todo_tool", return_direct=True)
-def todo_tool(action: str, task: str = None) -> str:
-    """
-    Manage a simple to-do list.
-    action: 'add', 'list', 'delete'
-    task: task text (required for add/delete)
-    """
-    with open(DATA_PATH, "r") as f:
-        todos = json.load(f)
-
-    if action == "add" and task:
-        todos.append(task)
-        with open(DATA_PATH, "w") as f:
-            json.dump(todos, f, indent=2)
-        return f"✅ Task added: {task}"
-
-    elif action == "list":
-        if not todos:
-            return "No tasks available."
-        return "\n".join([f"{i+1}. {t}" for i, t in enumerate(todos)])
-
-    elif action == "delete" and task:
-        if task in todos:
-            todos.remove(task)
-            with open(DATA_PATH, "w") as f:
-                json.dump(todos, f, indent=2)
-            return f"🗑️ Task deleted: {task}"
-        else:
-            return "Task not found."
-
-    return "Invalid action or missing task."
-```
-
----
-
-### 🧩 `tools/weather_tool.py`
-
-```python
-import requests
-import os
-from dotenv import load_dotenv
-from langchain.tools import tool
-
-load_dotenv()
-
-API_KEY = os.getenv("OPENWEATHER_API_KEY")
-
-@tool("weather_tool", return_direct=True)
-def weather_tool(city: str) -> str:
-    """
-    Fetch real-time weather data for any city using OpenWeather API.
-    """
-    if not API_KEY:
-        return "❌ Missing OPENWEATHER_API_KEY in .env file."
-
-    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
-    res = requests.get(url)
-
-    if res.status_code != 200:
-        return f"Error fetching weather: {res.text}"
-
-    data = res.json()
-    temp = data["main"]["temp"]
-    desc = data["weather"][0]["description"]
-    feels_like = data["main"]["feels_like"]
-    humidity = data["main"]["humidity"]
-
-    return f"🌤️ Weather in {city}:\nTemp: {temp}°C\nFeels Like: {feels_like}°C\nCondition: {desc}\nHumidity: {humidity}%"
-```
-
----
-
-### 🧩 `tools/search_tool.py`
-
-```python
-from langchain.tools import tool
-from langchain_community.utilities import SerpAPIWrapper
-
-@tool("search_tool", return_direct=True)
-def search_tool(query: str) -> str:
-    """
-    Perform a web search if information is not available in uploaded docs.
-    Requires SERPAPI_API_KEY in environment.
-    """
-    search = SerpAPIWrapper()
-    return search.run(query)
-```
-
----
-
-### 🧠 `main.py`
-
-```python
-from tools.reminder_tool import reminder_tool
-from tools.todo_tool import todo_tool
-from tools.weather_tool import weather_tool
-from tools.search_tool import search_tool
-
-def main():
-    # 🧩 Directly invoke each tool
-    print(reminder_tool.invoke({"action": "add", "reminder": "Buy groceries"}))
-    print(reminder_tool.invoke({"action": "list"}))
-
-    print(todo_tool.invoke({"action": "add", "task": "Finish assignment"}))
-    print(todo_tool.invoke({"action": "list"}))
-
-    print(weather_tool.invoke({"city": "Bangalore"}))
-
-    print(search_tool.invoke({"query": "LangChain 2025 features"}))
-
-if __name__ == "__main__":
-    main()
-```
-
----
-
-### 🧾 `.env`
-
-```
-OPENWEATHER_API_KEY=your_openweather_api_key_here
-SERPAPI_API_KEY=your_serpapi_api_key_here
-```
-
----
-
-✅ **This setup:**
-
-* Uses `@tool` for all four tools
-* Keeps them stateless and lightweight
-* Supports `.invoke()` calls (like LangChain expects)
-* Is ready to plug into an Agent later
-
----
-
-Would you like me to show you **how to register all these tools in a single `ToolKit`** (so they can be imported collectively by an agent later)?
+    class Config:
+        arbitrary_types_allowed = True
