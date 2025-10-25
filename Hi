@@ -1,52 +1,92 @@
-@tool("source_credibility_checker", return_direct=True)
-def source_credibility_checker(source_url: str) -> str:
+@tool("cross_reference_validator", return_direct=True)
+def cross_reference_validator(claim: str, k: int = 5) -> str:
     """
-    Evaluates the credibility of a given source using LLM reasoning.
+    Verifies a factual claim using:
+    1. Semantic retrieval from PGVector
+    2. Live web search (with last updated detection)
+    3. LLM reasoning for support/confidence analysis
 
-    The model analyzes:
-      - Domain authority (.gov, .edu, .org, etc.)
-      - Potential bias or sensationalism in domain name
-      - Known institution or journal reputation
-      - Contextual reliability cues (research org, media outlet)
-    
     Returns:
-        str: Natural-language explanation and credibility score (0-1)
+        str: A detailed validation report including source count,
+             credible domains, last updated dates, and reasoning.
     """
-    url = source_url.lower()
 
-    # Base heuristic for domain
-    domain_score = 0.5
-    if re.search(r"\.gov|\.edu|\.ac\.", url):
-        domain_score += 0.4
-    elif re.search(r"\.org", url):
-        domain_score += 0.2
-    elif re.search(r"blogspot|substack|wordpress|medium", url):
-        domain_score -= 0.2
+    # --- Step 1: Semantic retrieval from internal RAG ---
+    local_results = vector_store.similarity_search(claim, k=k)
+    local_texts = [doc.page_content[:300] for doc in local_results]
 
-    # Ask LLM for reasoning-based credibility evaluation
-    reasoning = llm.invoke(f"""
-    Evaluate the credibility of this source: {source_url}
-    Criteria:
-    1. Is it from an official or academic organization?
-    2. Does it likely contain verified, peer-reviewed, or expert content?
-    3. Is there evidence of bias or low editorial standards?
-    Give a reliability label (High/Moderate/Low) and justify briefly.
-    """).content
+    # --- Step 2: Live web search ---
+    web_results = search.results(claim, num_results=k)
+    urls = [r.get("link", "") for r in web_results]
+    snippets = [r.get("snippet", "") for r in web_results]
 
-    # Estimate score from reasoning text
-    if "high" in reasoning.lower():
-        llm_score = 0.9
-    elif "moderate" in reasoning.lower():
-        llm_score = 0.7
-    else:
-        llm_score = 0.4
+    # --- Step 3: Extract last updated or published dates ---
+    date_pattern = r"(?:\b(?:19|20)\d{2}[-/\.](?:0[1-9]|1[0-2])[-/\.](?:0[1-9]|[12][0-9]|3[01])\b)|(?:[A-Za-z]+\s\d{1,2},?\s(?:19|20)\d{2})"
+    source_details = []
 
-    final_score = (domain_score + llm_score) / 2
-    label = "High" if final_score >= 0.8 else "Moderate" if final_score >= 0.6 else "Low"
+    for url, snippet in zip(urls, snippets):
+        date_match = re.search(date_pattern, snippet)
+        last_updated = date_match.group(0) if date_match else "Not mentioned"
+        source_details.append({
+            "url": url,
+            "snippet": snippet[:200] + "...",
+            "last_updated": last_updated
+        })
+
+    # --- Step 4: Count credible sources ---
+    credible_domains = [u for u in urls if re.search(r"\.gov|\.edu|\.org|\.ac\.", u)]
+    support_ratio = len(credible_domains) / max(1, len(urls))
+
+    # --- Step 5: Construct reasoning prompt for LLM ---
+    reasoning_prompt = f"""
+    You are a fact verification system.
+
+    Claim to verify:
+    "{claim}"
+
+    Evidence from internal knowledge base:
+    {local_texts}
+
+    Web search results (with dates):
+    {[
+        f"- {src['url']} (Last Updated: {src['last_updated']}) | Snippet: {src['snippet']}"
+        for src in source_details
+    ]}
+
+    Summary:
+    Found {len(urls)} sources, of which {len(credible_domains)} are credible (.gov/.edu/.org).
+    The support ratio is {support_ratio:.2f}.
+
+    Based on this evidence:
+    - State whether the claim is supported, partially supported, or contradicted.
+    - Give a confidence score between 0 and 1.
+    - Emphasize recency and source credibility in your reasoning.
+    """
+
+    response = llm.invoke(reasoning_prompt).content
+
+    # --- Step 6: Extract confidence score ---
+    match = re.search(r"(\d\.\d+)", response)
+    conf_score = float(match.group(1)) if match else (0.6 + 0.4 * support_ratio)
+
+    verdict = (
+        "✅ Strongly Supported" if conf_score >= 0.8 else
+        "⚠️ Partially Supported" if conf_score >= 0.5 else
+        "❌ Not Supported or Contradicted"
+    )
+
+    # --- Step 7: Assemble readable report ---
+    formatted_sources = "\n".join([
+        f"🔗 {src['url']}\n   📅 Last Updated: {src['last_updated']}\n   🧾 Snippet: {src['snippet']}"
+        for src in source_details
+    ])
 
     return (
-        f"🔍 Source: {source_url}\n"
-        f"Credibility: {label}\n"
-        f"Score: {final_score:.2f}\n\n"
-        f"LLM Assessment:\n{reasoning.strip()}"
+        f"🧾 Claim: {claim}\n\n"
+        f"🌐 Sources Checked: {len(urls)} | Credible: {len(credible_domains)}\n"
+        f"📊 Support Ratio: {support_ratio:.2f}\n"
+        f"Verdict: {verdict}\n"
+        f"Confidence Score: {conf_score:.2f}\n\n"
+        f"🔍 Source Summary:\n{formatted_sources}\n\n"
+        f"🤖 LLM Reasoning:\n{response.strip()}"
     )
