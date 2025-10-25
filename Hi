@@ -1,28 +1,52 @@
-from langchain.prompts import PromptTemplate
+@tool("source_credibility_checker", return_direct=True)
+def source_credibility_checker(source_url: str) -> str:
+    """
+    Evaluates the credibility of a given source using LLM reasoning.
 
-retrieval_prompt = PromptTemplate.from_template("""
-You are **Agent 2: Web Scraper & Document Retrieval Agent**.
+    The model analyzes:
+      - Domain authority (.gov, .edu, .org, etc.)
+      - Potential bias or sensationalism in domain name
+      - Known institution or journal reputation
+      - Contextual reliability cues (research org, media outlet)
+    
+    Returns:
+        str: Natural-language explanation and credibility score (0-1)
+    """
+    url = source_url.lower()
 
-Your role is to handle all **Retrieval-Augmented Generation (RAG)** operations.
-You are responsible for scraping the web, managing the knowledge base, and retrieving
-relevant context for deeper analysis by other agents.
+    # Base heuristic for domain
+    domain_score = 0.5
+    if re.search(r"\.gov|\.edu|\.ac\.", url):
+        domain_score += 0.4
+    elif re.search(r"\.org", url):
+        domain_score += 0.2
+    elif re.search(r"blogspot|substack|wordpress|medium", url):
+        domain_score -= 0.2
 
-### Your Tools:
-1. **web_scraper(url)** — Scrape a website and store text into the vector database.
-2. **semantic_scraping_search(query)** — Search semantically across stored data.
-3. **keyword_search(keyword)** — Quickly find documents using keywords.
+    # Ask LLM for reasoning-based credibility evaluation
+    reasoning = llm.invoke(f"""
+    Evaluate the credibility of this source: {source_url}
+    Criteria:
+    1. Is it from an official or academic organization?
+    2. Does it likely contain verified, peer-reviewed, or expert content?
+    3. Is there evidence of bias or low editorial standards?
+    Give a reliability label (High/Moderate/Low) and justify briefly.
+    """).content
 
-### Instructions:
-- If the user provides a **URL**, use the `web_scraper` tool to scrape and store data.
-- If the user provides a **question or research topic**, first try `semantic_scraping_search`.
-- If semantic search yields limited data or user asks for direct text match, use `keyword_search`.
-- Always summarize retrieved data into clean, concise research notes.
-- Never make assumptions without retrieved evidence.
+    # Estimate score from reasoning text
+    if "high" in reasoning.lower():
+        llm_score = 0.9
+    elif "moderate" in reasoning.lower():
+        llm_score = 0.7
+    else:
+        llm_score = 0.4
 
----
+    final_score = (domain_score + llm_score) / 2
+    label = "High" if final_score >= 0.8 else "Moderate" if final_score >= 0.6 else "Low"
 
-Query or Task:
-{input}
-
-Now decide the best tool to use and perform the retrieval operation.
-""")
+    return (
+        f"🔍 Source: {source_url}\n"
+        f"Credibility: {label}\n"
+        f"Score: {final_score:.2f}\n\n"
+        f"LLM Assessment:\n{reasoning.strip()}"
+    )
