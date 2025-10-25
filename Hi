@@ -1,62 +1,62 @@
-@tool("comparative_analysis_tool", return_direct=True)
-def comparative_analysis_tool(query_a: str, query_b: str, k: int = 3) -> str:
+@tool("trend_analysis_tool", return_direct=True)
+def trend_analysis_tool(topic: str, timeframe: str = "2015-2025", k: int = 5) -> str:
     """
-    Performs comparative analysis between two topics, datasets, or document sets.
+    Detects temporal or progression trends related to a given topic.
 
     Steps:
-      1. Retrieves top-k semantically related chunks for each query from PGVector.
-      2. Summarizes each set separately.
-      3. Uses LLM reasoning to highlight similarities, differences, and insights.
+      1. Retrieves top-k documents from PGVector for the topic.
+      2. Extracts any year or date patterns in text.
+      3. Asks LLM to infer direction (rising/falling/stable), drivers, and implications.
 
     Args:
-        query_a (str): First concept/topic for comparison.
-        query_b (str): Second concept/topic for comparison.
-        k (int): Number of top documents to retrieve for each.
+        topic (str): Subject to analyze for trends.
+        timeframe (str): Optional reference range (e.g. "2015-2025").
+        k (int): Number of top docs to inspect.
 
     Returns:
-        str: Comparative summary (similarities, differences, key takeaways).
+        str: Structured trend analysis summary.
     """
 
-    # --- Step 1: Retrieve evidence for each topic ---
-    docs_a = vector_store.similarity_search(query_a, k=k)
-    docs_b = vector_store.similarity_search(query_b, k=k)
+    # --- Step 1: Retrieve evidence ---
+    docs = vector_store.similarity_search(topic, k=k)
+    text_data = "\n".join([d.page_content[:500] for d in docs])
 
-    text_a = "\n".join([d.page_content[:400] for d in docs_a])
-    text_b = "\n".join([d.page_content[:400] for d in docs_b])
+    # --- Step 2: Find temporal cues (years, dates) ---
+    years = sorted(set(re.findall(r"(?:19|20)\d{2}", text_data)))
+    years_str = ", ".join(years) if years else "No explicit years found"
 
-    # --- Step 2: Comparative reasoning prompt ---
+    # --- Step 3: LLM reasoning on temporal evolution ---
     prompt = f"""
-    You are the Comparative Analysis Engine.
+    You are the Trend Analysis Engine.
 
-    Compare the following two knowledge sets and produce an analytical summary.
+    Analyze the following data for topic: {topic}
+    Time Range: {timeframe}
 
-    --- Set A: {query_a} ---
-    {text_a}
+    Text Samples:
+    {text_data}
 
-    --- Set B: {query_b} ---
-    {text_b}
+    Detected Years: {years_str}
 
-    Task:
-      1. Identify core **similarities** (themes, facts, interpretations).
-      2. Identify **differences or contradictions**.
-      3. Highlight **contextual insights or implications**.
-      4. Provide a concise **summary paragraph** synthesizing findings.
-
-    Format your output clearly with sections:
-    - Similarities
-    - Differences
-    - Insights
-    - Summary
+    Tasks:
+      1. Identify key patterns or changes over time (increase, decline, cyclical, stable).
+      2. Describe factors causing those changes.
+      3. Predict short-term continuation or reversal of the trend.
+      4. Output:
+         - Trend Direction
+         - Quantitative Pattern (if mentioned)
+         - Main Drivers
+         - Future Outlook
+         - Concise Summary Paragraph
     """
 
     response = llm.invoke(prompt).content
 
-    # --- Step 3: Optional confidence estimation from LLM output ---
-    match = re.search(r"(\d\.\d+)", response)
-    conf = float(match.group(1)) if match else 0.75
+    # --- Step 4: Basic confidence inference from textual cues ---
+    conf_match = re.search(r"(\d\.\d+)", response)
+    conf_score = float(conf_match.group(1)) if conf_match else 0.75
 
     return (
-        f"🔍 Comparative Analysis between:\nA = {query_a}\nB = {query_b}\n\n"
-        f"Estimated Confidence: {conf:.2f}\n\n"
+        f"📈 Trend Analysis for '{topic}' ({timeframe})\n"
+        f"Confidence ≈ {conf_score:.2f}\n\n"
         f"{response.strip()}"
     )
