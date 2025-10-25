@@ -1,83 +1,28 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 
+class SubQueryRecord(BaseModel):
+    id: int
+    text: str                        # the sub-query itself
+    priority: int                    # lower = run earlier
+    status: str = "pending"          # pending | running | completed | failed
+    routed_path: Optional[List[str]] = None   # e.g. ["node2","node4"] or ["node3","node4"]
+    answer: Optional[str] = None
+    sources: Optional[List[Dict[str, Any]]] = None
+      # each source: { "url": "...", "title": "...", "last_updated": "...", "credibility_score": 0.85 }
+    confidence: Optional[float] = None
+    notes: Optional[str] = None      # e.g. "LLM-derived due to weak evidence"
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
 class ResearchCoordinatorState(BaseModel):
-    """
-    Central workflow state for Agent 1 (Research Coordinator Agent).
-    This tracks the entire multi-agent research pipeline.
-    """
-
-    # --- 🔹 User Input ---
-    user_query: str = Field(..., description="The main research query provided by the user.")
-
-    # --- 🔹 Node 1 Output: Query Decomposition ---
-    decomposed_subqueries: Optional[List[str]] = Field(
-        default=None,
-        description="List of smaller sub-queries generated from the main query."
-    )
-
-    # --- 🔹 Node 2 Output: Task Prioritization ---
-    task_plan: Optional[List[Dict[str, str]]] = Field(
-        default=None,
-        description="List of tasks with assigned agents and execution order."
-    )
-
-    # --- 🔹 Node 3 Output: Progress Tracking ---
-    progress_status: Optional[Dict[str, Dict[str, str]]] = Field(
-        default_factory=dict,
-        description="Tracks each agent’s current status and timestamp."
-    )
-    overall_completion: float = Field(
-        default=0.0,
-        description="Overall workflow completion percentage (0–100)."
-    )
-
-    # --- 🔹 Intermediate Outputs from Other Agents (2–5) ---
-    retrieval_summary: Optional[str] = Field(
-        default=None,
-        description="Summary of data collected by Agent 2 (Web Scraper & Document Retrieval)."
-    )
-    deep_analysis: Optional[str] = Field(
-        default=None,
-        description="Analytical findings from Agent 3 (Deep Analysis)."
-    )
-    validation_report: Optional[str] = Field(
-        default=None,
-        description="Fact-checking results from Agent 4 (Validation)."
-    )
-    formatted_report: Optional[str] = Field(
-        default=None,
-        description="Formatted structured report from Agent 5 (Formatting)."
-    )
-    executive_summary: Optional[str] = Field(
-        default=None,
-        description="Short summary from Agent 5 (Executive Summary Generator)."
-    )
-
-    # --- 🔹 Node 4 Output: Final Synthesis ---
-    final_report: Optional[str] = Field(
-        default=None,
-        description="Merged final report created in the synthesis step."
-    )
-    confidence_score: Optional[float] = Field(
-        default=None,
-        description="Aggregate confidence score derived from the validation agent."
-    )
-
-    # --- 🔹 System Metadata ---
-    next_node: Optional[str] = Field(
-        default=None,
-        description="Indicates which node should run next in the workflow."
-    )
-    created_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        description="Timestamp when the workflow started."
-    )
-    last_updated: datetime = Field(
-        default_factory=datetime.utcnow,
-        description="Last time the state was updated."
-    )
-
-    class Config:
-        arbitrary_types_allowed = True
+    user_query: str
+    sub_queries: List[SubQueryRecord] = []
+    next_subquery_id: Optional[int] = None
+    overall_progress_pct: float = 0.0   # computed from sub_queries statuses
+    remaining_subqueries: int = 0       # convenience field
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    final_report: Optional[str] = None
+    workflow_status: str = "in-progress"  # in-progress | completed | failed
