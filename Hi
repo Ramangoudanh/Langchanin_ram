@@ -3,71 +3,57 @@ def cross_reference_validator(claim: str, k: int = 5) -> str:
     """
     Verifies a factual claim using:
     1. Semantic retrieval from PGVector
-    2. Live web search (with last updated detection)
-    3. LLM reasoning for support/confidence analysis
+    2. DuckDuckGo web search (no API key needed)
+    3. LLM-based reasoning for final validation
 
     Returns:
         str: A detailed validation report including source count,
-             credible domains, last updated dates, and reasoning.
+             credible domains, recency, and LLM justification.
     """
 
-    # --- Step 1: Semantic retrieval from internal RAG ---
+    # --- Step 1: Retrieve internal evidence ---
     local_results = vector_store.similarity_search(claim, k=k)
     local_texts = [doc.page_content[:300] for doc in local_results]
 
     # --- Step 2: Live web search ---
-    web_results = search.results(claim, num_results=k)
-    urls = [r.get("link", "") for r in web_results]
-    snippets = [r.get("snippet", "") for r in web_results]
+    web_data = search.run(claim)  # returns summarized search text
+    # Split into pseudo "sources" (simulate multiple snippets)
+    snippet_chunks = [chunk.strip() for chunk in web_data.split("\n") if len(chunk.strip()) > 40][:k]
 
-    # --- Step 3: Extract last updated or published dates ---
-    date_pattern = r"(?:\b(?:19|20)\d{2}[-/\.](?:0[1-9]|1[0-2])[-/\.](?:0[1-9]|[12][0-9]|3[01])\b)|(?:[A-Za-z]+\s\d{1,2},?\s(?:19|20)\d{2})"
-    source_details = []
+    # --- Step 3: Identify credible & date-containing sources ---
+    credible_count = len([s for s in snippet_chunks if re.search(r"\.gov|\.edu|\.org|\.ac\.", s)])
+    date_pattern = r"(?:[A-Za-z]+\s\d{1,2},?\s(?:19|20)\d{2})|(?:\b(?:19|20)\d{2}\b)"
+    dates_found = re.findall(date_pattern, web_data)
+    latest_date = max(dates_found, default="Not mentioned")
 
-    for url, snippet in zip(urls, snippets):
-        date_match = re.search(date_pattern, snippet)
-        last_updated = date_match.group(0) if date_match else "Not mentioned"
-        source_details.append({
-            "url": url,
-            "snippet": snippet[:200] + "...",
-            "last_updated": last_updated
-        })
+    support_ratio = credible_count / max(1, len(snippet_chunks))
 
-    # --- Step 4: Count credible sources ---
-    credible_domains = [u for u in urls if re.search(r"\.gov|\.edu|\.org|\.ac\.", u)]
-    support_ratio = len(credible_domains) / max(1, len(urls))
-
-    # --- Step 5: Construct reasoning prompt for LLM ---
+    # --- Step 4: LLM validation reasoning ---
     reasoning_prompt = f"""
-    You are a fact verification system.
+    You are a factual claim validation system.
 
-    Claim to verify:
-    "{claim}"
+    Claim: "{claim}"
 
-    Evidence from internal knowledge base:
+    Evidence from internal corpus:
     {local_texts}
 
-    Web search results (with dates):
-    {[
-        f"- {src['url']} (Last Updated: {src['last_updated']}) | Snippet: {src['snippet']}"
-        for src in source_details
-    ]}
+    Web evidence snippets:
+    {snippet_chunks}
 
-    Summary:
-    Found {len(urls)} sources, of which {len(credible_domains)} are credible (.gov/.edu/.org).
-    The support ratio is {support_ratio:.2f}.
+    Found {len(snippet_chunks)} total results, {credible_count} credible sources.
+    Most recent mention: {latest_date}.
 
-    Based on this evidence:
-    - State whether the claim is supported, partially supported, or contradicted.
-    - Give a confidence score between 0 and 1.
-    - Emphasize recency and source credibility in your reasoning.
+    Based on this, decide:
+    - Is the claim supported, partially supported, or contradicted?
+    - Give a confidence score (0–1).
+    - Briefly justify your reasoning.
     """
 
     response = llm.invoke(reasoning_prompt).content
 
-    # --- Step 6: Extract confidence score ---
+    # --- Step 5: Confidence score extraction ---
     match = re.search(r"(\d\.\d+)", response)
-    conf_score = float(match.group(1)) if match else (0.6 + 0.4 * support_ratio)
+    conf_score = float(match.group(1)) if match else (0.5 + 0.5 * support_ratio)
 
     verdict = (
         "✅ Strongly Supported" if conf_score >= 0.8 else
@@ -75,18 +61,13 @@ def cross_reference_validator(claim: str, k: int = 5) -> str:
         "❌ Not Supported or Contradicted"
     )
 
-    # --- Step 7: Assemble readable report ---
-    formatted_sources = "\n".join([
-        f"🔗 {src['url']}\n   📅 Last Updated: {src['last_updated']}\n   🧾 Snippet: {src['snippet']}"
-        for src in source_details
-    ])
-
+    # --- Step 6: Return result summary ---
     return (
         f"🧾 Claim: {claim}\n\n"
-        f"🌐 Sources Checked: {len(urls)} | Credible: {len(credible_domains)}\n"
+        f"🌐 Web Snippets Analyzed: {len(snippet_chunks)} | Credible: {credible_count}\n"
+        f"🕒 Latest Source Mention: {latest_date}\n"
         f"📊 Support Ratio: {support_ratio:.2f}\n"
         f"Verdict: {verdict}\n"
         f"Confidence Score: {conf_score:.2f}\n\n"
-        f"🔍 Source Summary:\n{formatted_sources}\n\n"
         f"🤖 LLM Reasoning:\n{response.strip()}"
     )
