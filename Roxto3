@@ -1,1 +1,55 @@
+import json
+from datetime import datetime
+
+@agent1.node("node3", prompt=deep_analysis_prompt)
+def node3_deep_analysis(state: ResearchCoordinatorState) -> ResearchCoordinatorState:
+    """
+    Node 3 – Performs comparative/trend/causal analysis for descriptive sub-queries.
+    """
+
+    print("\n📊 [Agent 1 – Node 3] Running Deep Analysis...")
+
+    # Locate current running sub-query
+    current = next((sq for sq in state.sub_queries if sq.status == "running"), None)
+    if not current:
+        print("⚠️ No active sub-query found.")
+        state.next_node = "query_decomposition_and_order_node"
+        return state
+
+    # Build input for LLM
+    llm_input = f"""
+    Sub-query ID: {current.id}
+    Question: {current.text}
+    Perform analysis according to node instructions and return valid JSON only.
+    """
+
+    response = agent1.llm.invoke(llm_input).content.strip()
+
+    # Parse output
+    try:
+        payload = json.loads(response)["analysis_payload"]
+    except Exception:
+        payload = {
+            "sub_query_id": current.id,
+            "question": current.text,
+            "findings": ["Analysis failed – fallback."],
+            "trends": [],
+            "comparisons": [],
+            "statistical_notes": "",
+            "summary": "LLM did not return valid JSON."
+        }
+
+    # Attach payload to current sub-query
+    current.notes = payload.get("summary", "")
+    current.status = "analyzed"
+    current.analysis_output = payload
+    state.last_updated = datetime.utcnow()
+
+    print(f"✅ Analysis for sub-query #{current.id} completed.")
+    print(f"📄 Summary: {payload.get('summary', 'No summary')}")
+
+    # Route to Node 4 for validation
+    state.next_node = "node4"
+
+    return state
 
