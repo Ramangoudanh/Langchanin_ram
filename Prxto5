@@ -1,65 +1,73 @@
+from langchain.output_parsers import StructuredOutputParser, ResponseSchema
+
+report_schema = [
+    ResponseSchema(name="title", description="Title of the research report"),
+    ResponseSchema(name="abstract", description="Concise abstract or executive summary"),
+    ResponseSchema(name="introduction", description="Research introduction"),
+    ResponseSchema(name="methodology", description="Methodology summary"),
+    ResponseSchema(name="findings", description="List of findings and validated answers"),
+    ResponseSchema(name="discussion", description="Analytical discussion of results"),
+    ResponseSchema(name="conclusion", description="Overall conclusion"),
+    ResponseSchema(name="citations", description="List of references"),
+    ResponseSchema(name="meta", description="Meta info like confidence and generation time")
+]
+
+report_output_parser = StructuredOutputParser.from_response_schemas(report_schema)
+report_format_instructions = report_output_parser.get_format_instructions()
+
+
 import json
 from datetime import datetime
 
-@agent1.node("node5", prompt=report_synthesis_prompt)
+@agent1.node("node5", prompt="Final report synthesis with structured output parser")
 def node5_report_assembly(state: ResearchCoordinatorState) -> ResearchCoordinatorState:
     """
-    Node 5 – Compiles all sub-query results into the final structured report.
+    Node 5 – Uses Agent 5 (OutputFormattingAgent) to generate a fully structured report.
     """
 
-    print("\n📘 [Agent 1 – Node 5] Assembling final report...")
+    print("\n📘 [Agent 1 – Node 5] Assembling final structured report...")
 
-    # Collect completed sub-queries
     completed_subs = [s for s in state.sub_queries if s.status == "completed"]
     if not completed_subs:
         print("⚠️ No completed sub-queries found; cannot assemble report.")
         state.next_node = None
         return state
 
-    # Build structured input for LLM
-    llm_input = json.dumps([
+    # Prepare validated results payload
+    validated_results = [
         {
-            "id": s.id,
             "question": s.text,
-            "answer": s.answer,
-            "sources": s.sources or [],
-            "confidence": s.confidence or 0.0
+            "verified_summary": s.answer,
+            "sources_used": s.sources or [],
+            "confidence": s.confidence or 0.8
         }
         for s in completed_subs
-    ], indent=2)
+    ]
 
-    # Ask LLM to create structured report JSON
-    llm_response = agent1.llm.invoke(
-        f"Using the following sub-query data, assemble the final report according to your node instructions:\n{llm_input}"
-    ).content.strip()
+    # Build instruction for Agent 5
+    llm_input = f"""
+    You are the OutputFormattingAgent. Using the following validated results,
+    produce the final structured report according to the required schema below.
 
-    # Parse output
-    try:
-        report_data = json.loads(llm_response)["final_report"]
-    except Exception:
-        report_data = {
-            "title": state.user_query[:60] + "...",
-            "executive_summary": "LLM output parsing failed; fallback minimal report.",
-            "sections": [
-                {"sub_query": s.text, "answer": s.answer, "confidence": s.confidence, "sources": s.sources}
-                for s in completed_subs
-            ],
-            "meta": {
-                "overall_confidence": round(sum(s.confidence or 0 for s in completed_subs) / len(completed_subs), 2),
-                "total_subqueries": len(completed_subs),
-                "completion_date": datetime.utcnow().isoformat()
-            }
-        }
+    SCHEMA:
+    {report_format_instructions}
 
-    # Store in state
-    state.final_report = report_data
-    state.overall_progress_pct = 100.0
+    USER QUERY: {state.user_query}
+
+    VALIDATED RESULTS:
+    {json.dumps(validated_results, indent=2)}
+    """
+
+    # 🔹 Call Agent 5 with Structured Output Parser
+    response = agent5.llm.invoke(llm_input)
+    parsed_output = report_output_parser.parse(response.content)
+
+    # 🔹 Save parsed report in state
+    state.final_report = parsed_output
     state.workflow_status = "completed"
+    state.overall_progress_pct = 100.0
     state.last_updated = datetime.utcnow()
     state.next_node = None
 
-    print(f"✅ Final report assembled. Total sub-queries: {len(completed_subs)}")
-    print(f"📊 Overall confidence: {report_data['meta']['overall_confidence']}")
-    print("🎯 Workflow completed successfully.")
-
+    print("✅ Final structured report generated and parsed successfully.")
     return state
