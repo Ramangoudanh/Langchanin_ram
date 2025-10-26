@@ -1,5 +1,4 @@
 from langchain.output_parsers import StructuredOutputParser, ResponseSchema
-
 report_schema = [
     ResponseSchema(name="title", description="Title of the research report"),
     ResponseSchema(name="abstract", description="Concise abstract or executive summary"),
