@@ -1,33 +1,37 @@
 from pyspark.sql import functions as F
 
-# 1. find parts that appear under at least 2 different brands
-multi_brand_parts_df = (
-    part_df
-    .groupBy("p_partkey")
-    .agg(F.countDistinct("p_brand").alias("brand_count"))
-    .filter(F.col("brand_count") >= 2)
-    .select("p_partkey")
+# 1. get the most recent year from orders
+latest_year = (
+    orders_df
+    .select(F.year("o_orderdate").alias("year"))
+    .agg(F.max("year"))
+    .first()[0]
 )
 
-# 2. join with lineitem to compute discounted revenue only for valid parts
-discounted_revenue_df = (
-    lineitem_df
-    .join(multi_brand_parts_df, "l_partkey")
-    .withColumn("discounted_revenue", F.col("l_extendedprice") * (1 - F.col("l_discount")))
+# 2. filter orders from that year and extract month
+orders_year_df = (
+    orders_df
+    .filter(F.year("o_orderdate") == latest_year)
+    .withColumn("order_month", F.month("o_orderdate"))
+    .select("o_custkey", "o_orderkey", "order_month")
+    .distinct()
 )
 
-# 3. sum revenue per supplier
-supplier_revenue_df = (
-    discounted_revenue_df
-    .groupBy("l_suppkey")
-    .agg(F.sum("discounted_revenue").alias("total_discounted_revenue"))
+# 3. count distinct months per customer
+cust_month_counts_df = (
+    orders_year_df
+    .groupBy("o_custkey")
+    .agg(F.countDistinct("order_month").alias("months_ordered"))
 )
 
-# 4. join supplier table (optional, if name required)
+# 4. keep only customers with orders in all 12 months
+full_year_customers_df = cust_month_counts_df.filter(F.col("months_ordered") == 12)
+
+# 5. join with customer table to get names
 result_df = (
-    supplier_revenue_df
-    .join(supplier_df.select("s_suppkey", "s_name"), supplier_revenue_df.l_suppkey == supplier_df.s_suppkey)
-    .select("s_suppkey", "s_name", "total_discounted_revenue")
+    full_year_customers_df
+    .join(customer_df.select("c_custkey", "c_name"), full_year_customers_df.o_custkey == customer_df.c_custkey)
+    .select("c_name")
 )
 
 result_df.show(truncate=False)
