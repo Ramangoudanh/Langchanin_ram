@@ -1,39 +1,30 @@
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-# 1. compute revenue per line
-line_revenue_df = (
+# 1. filter lineitems where receiptdate > commitdate
+late_items_df = (
     lineitem_df
-    .withColumn("l_revenue", F.col("l_extendedprice") * (1 - F.col("l_discount")))
-    .groupBy("l_orderkey")
-    .agg(F.sum("l_revenue").alias("order_revenue"))
+    .filter(F.col("l_receiptdate") > F.col("l_commitdate"))
+    .select("l_orderkey")
+    .distinct()
 )
 
-# 2. compute total revenue per customer
-cust_revenue_df = (
+# 2. compute average totalprice per order priority
+priority_avg_df = (
     orders_df
-    .join(line_revenue_df, orders_df.o_orderkey == line_revenue_df.l_orderkey)
-    .groupBy("o_custkey")
-    .agg(F.sum("order_revenue").alias("total_revenue"))
-    .withColumnRenamed("o_custkey", "c_custkey")
+    .groupBy("o_orderpriority")
+    .agg(F.avg("o_totalprice").alias("avg_totalprice"))
 )
 
-# 3. join CUSTOMER → NATION → REGION
-cust_region_df = (
-    cust_revenue_df
-    .join(customer_df.select("c_custkey", "c_nationkey"), "c_custkey")
-    .join(nation_df.select("n_nationkey", "n_regionkey"), cust_revenue_df.c_nationkey == nation_df.n_nationkey)
-    .join(region_df.select("r_regionkey", "r_name"), nation_df.n_regionkey == region_df.r_regionkey)
-    .select("c_custkey", "total_revenue", "r_name")
-)
-
-# 4. percentile rank within region
-window = Window.partitionBy("r_name").orderBy(F.col("total_revenue"))
-
+# 3. join everything and filter
 result_df = (
-    cust_region_df
-    .withColumn("percentile_rank", F.percent_rank().over(window))
-    .orderBy("r_name", "percentile_rank")
+    orders_df
+    .join(late_items_df, orders_df.o_orderkey == late_items_df.l_orderkey)
+    .join(priority_avg_df, "o_orderpriority")
+    .filter(F.col("o_totalprice") > F.col("avg_totalprice"))
+    .select("o_orderkey", "o_orderdate", "o_totalprice")
+    .distinct()
 )
 
 result_df.show(truncate=False)
+
