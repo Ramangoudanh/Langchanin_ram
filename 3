@@ -1,29 +1,47 @@
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
-# 1. compute discounted revenue per lineitem
-line_revenue_df = (
-    lineitem_df
-    .withColumn("revenue", F.col("l_extendedprice") * (1 - F.col("l_discount")))
-    .select("l_orderkey", "l_suppkey", "revenue")
+# Window per customer ordered by orderdate ascending (earliest first)
+w_asc = Window.partitionBy("o_custkey").orderBy("o_orderdate")
+
+# Window per customer ordered by orderdate descending (latest first)
+w_desc = Window.partitionBy("o_custkey").orderBy(F.col("o_orderdate").desc())
+
+# Add ranking to find earliest & latest orders
+ranked_orders_df = (
+    orders_df
+    .withColumn("rn_earliest", F.row_number().over(w_asc))
+    .withColumn("rn_latest", F.row_number().over(w_desc))
 )
 
-# 2. join orders to get customer for each order
-order_customer_df = orders_df.select("o_orderkey", "o_custkey")
-
-# 3. join lineitem + orders to connect supplier <-> customer
-supplier_customer_revenue_df = (
-    line_revenue_df
-    .join(order_customer_df, "l_orderkey")
-    .groupBy("l_suppkey", "o_custkey")
-    .agg(F.sum("revenue").alias("total_transaction_value"))
+# Extract earliest orders
+earliest_df = (
+    ranked_orders_df
+    .filter(F.col("rn_earliest") == 1)
+    .select(
+        "o_custkey",
+        F.col("o_orderdate").alias("earliest_orderdate"),
+        F.col("o_totalprice").alias("earliest_orderprice")
+    )
 )
 
-# 4. get top 10 supplier-customer pairs by revenue
-top10_df = (
-    supplier_customer_revenue_df
-    .orderBy(F.col("total_transaction_value").desc())
-    .limit(10)
-    .select("l_suppkey", "o_custkey", "total_transaction_value")
+# Extract latest orders
+latest_df = (
+    ranked_orders_df
+    .filter(F.col("rn_latest") == 1)
+    .select(
+        "o_custkey",
+        F.col("o_orderdate").alias("latest_orderdate"),
+        F.col("o_totalprice").alias("latest_orderprice")
+    )
 )
 
-top10_df.show(truncate=False)
+# Join earliest + latest + customer name
+result_df = (
+    earliest_df
+    .join(latest_df, "o_custkey")
+    .join(customer_df.select("c_custkey", "c_name"), earliest_df.o_custkey == customer_df.c_custkey)
+    .select("c_name", "earliest_orderdate", "earliest_orderprice", "latest_orderdate", "latest_orderprice")
+)
+
+result_df.show(truncate=False)
