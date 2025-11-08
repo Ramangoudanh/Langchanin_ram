@@ -1,30 +1,33 @@
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-# 1. filter lineitems where receiptdate > commitdate
-late_items_df = (
+# 1. Find first order date per customer
+first_order_df = (
+    orders_df
+    .withColumn(
+        "order_rank",
+        F.row_number().over(
+            Window.partitionBy("o_custkey").orderBy("o_orderdate")
+        )
+    )
+    .filter(F.col("order_rank") == 1)
+    .select("o_custkey", "o_orderkey", "o_orderdate")
+)
+
+# 2. Check first order has at least one lineitem with shipmode = 'AIR'
+air_ship_df = (
     lineitem_df
-    .filter(F.col("l_receiptdate") > F.col("l_commitdate"))
+    .filter(F.col("l_shipmode") == "AIR")
     .select("l_orderkey")
     .distinct()
 )
 
-# 2. compute average totalprice per order priority
-priority_avg_df = (
-    orders_df
-    .groupBy("o_orderpriority")
-    .agg(F.avg("o_totalprice").alias("avg_totalprice"))
-)
-
-# 3. join everything and filter
+# 3. Join and return customers whose first order shipped by AIR
 result_df = (
-    orders_df
-    .join(late_items_df, orders_df.o_orderkey == late_items_df.l_orderkey)
-    .join(priority_avg_df, "o_orderpriority")
-    .filter(F.col("o_totalprice") > F.col("avg_totalprice"))
-    .select("o_orderkey", "o_orderdate", "o_totalprice")
-    .distinct()
+    first_order_df
+    .join(air_ship_df, first_order_df.o_orderkey == air_ship_df.l_orderkey)
+    .join(customer_df.select("c_custkey", "c_name"), "o_custkey")
+    .select("c_name", "o_orderdate")
 )
 
 result_df.show(truncate=False)
-
