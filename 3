@@ -1,47 +1,113 @@
 from pyspark.sql import functions as F
+
+# join lineitem -> orders -> customers -> nations
+part_customer_nation_df = (
+    lineitem_df
+    .join(orders_df.select("o_orderkey", "o_custkey"), "l_orderkey")
+    .join(customer_df.select("c_custkey", "c_nationkey"), "o_custkey")
+    .join(nation_df.select("n_nationkey", "n_name"), customer_df.c_nationkey == nation_df.n_nationkey)
+    .select("l_partkey", "n_name")
+    .distinct()
+)
+
+# count distinct nations per part
+part_nation_count_df = (
+    part_customer_nation_df
+    .groupBy("l_partkey")
+    .agg(F.countDistinct("n_name").alias("nation_count"))
+    .filter(F.col("nation_count") >= 5)
+)
+
+# join with part table to get p_name
+result_q10_df = (
+    part_nation_count_df
+    .join(part_df.select("p_partkey", "p_name"), part_nation_count_df.l_partkey == part_df.p_partkey)
+    .select("p_partkey", "p_name")
+)
+
+result_q10_df.show(truncate=False)
+from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-# Window per customer ordered by orderdate ascending (earliest first)
-w_asc = Window.partitionBy("o_custkey").orderBy("o_orderdate")
-
-# Window per customer ordered by orderdate descending (latest first)
-w_desc = Window.partitionBy("o_custkey").orderBy(F.col("o_orderdate").desc())
-
-# Add ranking to find earliest & latest orders
-ranked_orders_df = (
+# compute avg totalprice per nation
+nation_avg_df = (
     orders_df
-    .withColumn("rn_earliest", F.row_number().over(w_asc))
-    .withColumn("rn_latest", F.row_number().over(w_desc))
+    .join(customer_df.select("c_custkey", "c_nationkey"), "o_custkey")
+    .groupBy("c_nationkey")
+    .agg(F.avg("o_totalprice").alias("avg_order_total"))
 )
 
-# Extract earliest orders
-earliest_df = (
-    ranked_orders_df
-    .filter(F.col("rn_earliest") == 1)
-    .select(
-        "o_custkey",
-        F.col("o_orderdate").alias("earliest_orderdate"),
-        F.col("o_totalprice").alias("earliest_orderprice")
-    )
+# join nation -> region
+nation_region_avg_df = (
+    nation_avg_df
+    .join(nation_df.select("n_nationkey", "n_name", "n_regionkey"), "c_nationkey")
+    .join(region_df.select("r_regionkey", "r_name"), "n_regionkey")
 )
 
-# Extract latest orders
-latest_df = (
-    ranked_orders_df
-    .filter(F.col("rn_latest") == 1)
-    .select(
-        "o_custkey",
-        F.col("o_orderdate").alias("latest_orderdate"),
-        F.col("o_totalprice").alias("latest_orderprice")
-    )
+# pick top nation per region
+window = Window.partitionBy("r_name").orderBy(F.col("avg_order_total").desc())
+
+result_q11_df = (
+    nation_region_avg_df
+    .withColumn("rank", F.row_number().over(window))
+    .filter(F.col("rank") == 1)
+    .select("r_name", "n_name", "avg_order_total")
 )
 
-# Join earliest + latest + customer name
-result_df = (
-    earliest_df
-    .join(latest_df, "o_custkey")
-    .join(customer_df.select("c_custkey", "c_name"), earliest_df.o_custkey == customer_df.c_custkey)
-    .select("c_name", "earliest_orderdate", "earliest_orderprice", "latest_orderdate", "latest_orderprice")
+result_q11_df.show(truncate=False)
+
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+# window per order to rank discounts (highest first)
+w = Window.partitionBy("l_orderkey").orderBy(F.col("l_discount").desc())
+
+ranked_df = (
+    lineitem_df
+    .withColumn("rn", F.row_number().over(w))
 )
 
-result_df.show(truncate=False)
+# select highest discount per order
+max_discount_df = (
+    ranked_df
+    .filter(F.col("rn") == 1)
+    .select("l_orderkey", "l_suppkey", "l_discount")
+)
+
+# join supplier table if name is needed
+result_q12_df = (
+    max_discount_df
+    .join(supplier_df.select("s_suppkey", "s_name"), max_discount_df.l_suppkey == supplier_df.s_suppkey)
+    .select("l_orderkey", "s_suppkey", "s_name", "l_discount")
+)
+
+result_q12_df.show(truncate=False)
+
+# 1. compute revenue per order
+order_revenue_df = (
+    lineitem_df
+    .withColumn("revenue", F.col("l_extendedprice") * (1 - F.col("l_discount")))
+    .groupBy("l_orderkey")
+    .agg(F.sum("revenue").alias("order_revenue"))
+)
+
+# 2. join orders to get customer + date
+cust_orders_df = (
+    orders_df
+    .join(order_revenue_df, orders_df.o_orderkey == order_revenue_df.l_orderkey)
+    .select("o_orderkey", "o_custkey", "o_orderdate", "order_revenue")
+)
+
+# 3. cumulative revenue per customer
+w = Window.partitionBy("o_custkey").orderBy("o_orderdate").rowsBetween(Window.unboundedPreceding, Window.currentRow)
+
+result_q13_df = (
+    cust_orders_df
+    .withColumn("cumulative_revenue", F.sum("order_revenue").over(w))
+    .join(customer_df.select("c_custkey", "c_name"), "o_custkey")
+    .select("c_name", "o_orderdate", "order_revenue", "cumulative_revenue")
+    .orderBy("c_name", "o_orderdate")
+)
+
+result_q13_df.show(truncate=False)
+
