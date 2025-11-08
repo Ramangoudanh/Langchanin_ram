@@ -1,26 +1,33 @@
 from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 
-# 1. For each supplier, rank lineitems by extendedprice (largest first)
-window = Window.partitionBy("l_suppkey").orderBy(F.col("l_extendedprice").desc())
+# 1. find parts that appear under at least 2 different brands
+multi_brand_parts_df = (
+    part_df
+    .groupBy("p_partkey")
+    .agg(F.countDistinct("p_brand").alias("brand_count"))
+    .filter(F.col("brand_count") >= 2)
+    .select("p_partkey")
+)
 
-ranked_sales_df = (
+# 2. join with lineitem to compute discounted revenue only for valid parts
+discounted_revenue_df = (
     lineitem_df
-    .withColumn("rank", F.row_number().over(window))
+    .join(multi_brand_parts_df, "l_partkey")
+    .withColumn("discounted_revenue", F.col("l_extendedprice") * (1 - F.col("l_discount")))
 )
 
-# 2. Keep only highest sale per supplier
-largest_sale_df = (
-    ranked_sales_df
-    .filter(F.col("rank") == 1)
-    .select("l_suppkey", "l_orderkey", "l_linenumber", "l_extendedprice")
+# 3. sum revenue per supplier
+supplier_revenue_df = (
+    discounted_revenue_df
+    .groupBy("l_suppkey")
+    .agg(F.sum("discounted_revenue").alias("total_discounted_revenue"))
 )
 
-# 3. Join with supplier table to get supplier details if needed
+# 4. join supplier table (optional, if name required)
 result_df = (
-    largest_sale_df
-    .join(supplier_df.select("s_suppkey", "s_name"), largest_sale_df.l_suppkey == supplier_df.s_suppkey)
-    .select("s_suppkey", "s_name", "l_orderkey", "l_linenumber", "l_extendedprice")
+    supplier_revenue_df
+    .join(supplier_df.select("s_suppkey", "s_name"), supplier_revenue_df.l_suppkey == supplier_df.s_suppkey)
+    .select("s_suppkey", "s_name", "total_discounted_revenue")
 )
 
 result_df.show(truncate=False)
